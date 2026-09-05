@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/decred/dcrd/chaincfg/v3"
-	"github.com/decred/dcrd/dcrutil/v4"
 	"github.com/decred/slog"
 	"github.com/jessevdk/go-flags"
+	"github.com/monetarium/monetarium-node/chaincfg"
+	"github.com/monetarium/monetarium-node/dcrutil"
 )
 
 const (
@@ -36,13 +36,13 @@ const (
 
 var (
 	minerHomeDir          = dcrutil.AppDataDir("gominer", false)
-	dcrdHomeDir           = dcrutil.AppDataDir("dcrd", false)
+	nodeHomeDir           = dcrutil.AppDataDir("monetarium", false)
 	defaultConfigFile     = filepath.Join(minerHomeDir, defaultConfigFilename)
 	defaultRPCServer      = "localhost"
-	defaultRPCCertFile    = filepath.Join(dcrdHomeDir, "rpc.cert")
-	defaultRPCPortMainNet = "9109"
-	defaultRPCPortTestNet = "19109"
-	defaultRPCPortSimNet  = "19556"
+	defaultRPCCertFile    = filepath.Join(nodeHomeDir, "rpc.cert")
+	defaultRPCPortMainNet = "9509"
+	defaultRPCPortTestNet = "19509"
+	defaultRPCPortSimNet  = "19956"
 	defaultAPIPort        = "3333"
 	defaultLogDir         = filepath.Join(minerHomeDir, defaultLogDirname)
 	defaultAutocalibrate  = 500

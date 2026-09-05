@@ -14,12 +14,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/decred/dcrd/chaincfg/chainhash"
-	"github.com/decred/dcrd/crypto/blake256"
-	"github.com/decred/dcrd/rpcclient/v8"
 	"github.com/decred/gominer/stratum"
 	"github.com/decred/gominer/util"
 	"github.com/decred/gominer/work"
+	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
+	"github.com/monetarium/monetarium-node/crypto/blake256"
+	"github.com/monetarium/monetarium-node/rpcclient"
 )
 
 type Miner struct {
