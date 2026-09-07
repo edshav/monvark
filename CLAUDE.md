@@ -147,7 +147,7 @@ outside this binary.
 
 ## Monetarium specifics
 
-Dependencies are `monetarium-node` submodules at `v1.3.9`. Monetarium tags all
+Dependencies are `monetarium-node` submodules at `v1.3.10`. Monetarium tags all
 of its submodules together under one version with **no major-version path
 suffixes**, so the dcrd `/v2`, `/v3`, `/v4`, `/v8` elements are gone
 (`chaincfg/v3` → `chaincfg`, `rpcclient/v8` → `rpcclient`, …). Only three files
