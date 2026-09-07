@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/binary"
 	"testing"
 	"time"
 
+	"github.com/edshav/monvark/work"
 	chainjson "github.com/monetarium/monetarium-node/rpc/jsonrpc/types"
 )
 
@@ -129,4 +131,42 @@ func TestWorkStale(t *testing.T) {
 	if workStale(old, now, 20*time.Minute) {
 		t.Error("work reported stale under a longer bound")
 	}
+}
+
+func TestSameTemplate(t *testing.T) {
+	var current [192]byte
+	for i := range current {
+		current[i] = byte(i)
+	}
+
+	// The case that matters: getwork refreshes the timestamp on every call,
+	// so a poll of an otherwise-unchanged template must still compare equal.
+	t.Run("same template, different timestamp word", func(t *testing.T) {
+		data := current
+		binary.LittleEndian.PutUint32(data[128+4*work.TimestampWord:], 0xdeadbeef)
+		if !sameTemplate(data[:], current) {
+			t.Error("same template with a refreshed timestamp reported as a different one")
+		}
+	})
+
+	t.Run("identical data", func(t *testing.T) {
+		data := current
+		if !sameTemplate(data[:], current) {
+			t.Error("identical data reported as a different template")
+		}
+	})
+
+	t.Run("different template", func(t *testing.T) {
+		data := current
+		data[0] ^= 0xff
+		if sameTemplate(data[:], current) {
+			t.Error("a changed template reported as the same one")
+		}
+	})
+
+	t.Run("data shorter than the identity prefix", func(t *testing.T) {
+		if sameTemplate(current[:100], current) {
+			t.Error("short data reported as the same template")
+		}
+	})
 }

@@ -128,6 +128,11 @@ func monvarkMain() error {
 
 	m, err := NewMiner(ctx, devices, workDone, payoutAddr)
 	if err != nil {
+		// As with nodeStart and WaitSynced above, a cancelled context here
+		// means the user interrupted the run, not that the miner is broken.
+		if ctx.Err() != nil {
+			return nil
+		}
 		mainLog.Criticalf("Error initializing miner: %v", err)
 		return err
 	}

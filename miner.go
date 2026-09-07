@@ -282,6 +282,23 @@ func workStale(received uint32, now time.Time, bound time.Duration) bool {
 	return now.Sub(time.Unix(int64(received), 0)) > bound
 }
 
+// templateIdentity is how much of Work.Data identifies the block template
+// rather than a particular attempt at it: data[0:128] is the midstate half --
+// version, previous block, both merkle roots and bits -- and stops before the
+// height, size, timestamp and nonces (see "Work data layout" in CLAUDE.md).
+const templateIdentity = 128
+
+// sameTemplate reports whether data describes the same block template as
+// current.  getwork refreshes the timestamp on every call (the node's
+// handleGetWorkRequest calls UpdateBlockTime before serializing), so
+// comparing the full 192 bytes would never match even when the template
+// itself is unchanged; comparing only the identifying prefix is what makes
+// the quiet-chain classification reachable at all.
+func sameTemplate(data []byte, current [192]byte) bool {
+	return len(data) >= templateIdentity &&
+		bytes.Equal(data[:templateIdentity], current[:templateIdentity])
+}
+
 // expiryThread re-issues GetWork when no pushed work has arrived within the
 // bound.  It never stops the devices: the poll's own result already separates a
 // broken push path from a quiet chain, so a stop would convey nothing while
@@ -310,8 +327,21 @@ func (m *Miner) expiryThread(ctx context.Context) {
 			continue
 		}
 
-		result, err := m.rpc.GetWork(ctx)
+		// rpcclient (v1.3.10) does not fail a pending request on disconnect
+		// while auto-reconnect is enabled -- it holds the request open and
+		// retries the connection indefinitely, so a dead node would otherwise
+		// block this call forever and the failure policy below could never
+		// fire.  Give the poll its own deadline instead of ctx's.
+		pollCtx, pollCancel := context.WithTimeout(ctx, 30*time.Second)
+		result, err := m.rpc.GetWork(pollCtx)
+		pollCancel()
 		if err != nil {
+			// A cancelled run is not a node failure.  Check the parent
+			// context, not the poll's own deadline, or a mere poll timeout
+			// would be mistaken for a shutdown.
+			if ctx.Err() != nil {
+				return
+			}
 			failures++
 			minrLog.Warnf("No work for over %v and GetWork failed (%d of %d "+
 				"before giving up): %v", workExpiry, failures, maxFailures, err)
@@ -337,8 +367,7 @@ func (m *Miner) expiryThread(ctx context.Context) {
 			continue
 		}
 
-		if len(data) <= len(current.Data) &&
-			bytes.Equal(data, current.Data[:len(data)]) {
+		if sameTemplate(data, current.Data) {
 			minrLog.Debugf("No new work for %v; the chain is quiet and the "+
 				"node agrees", workExpiry)
 		} else {

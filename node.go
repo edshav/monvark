@@ -260,9 +260,15 @@ func nodeStart(ctx context.Context, cfg *config, addr string) (*nodeProc, error)
 // node needs a moment to start and to generate its certificate, which does not
 // exist at all on a first run.
 func (n *nodeProc) connect(ctx context.Context, cfg *config) (*rpcclient.Client, error) {
-	const timeout = 30 * time.Second
+	// A dcrd-family node opens its block database and initialises the chain
+	// before it starts the RPC listener, which on a synced chain -- especially
+	// after an unclean shutdown -- can take much longer than a few seconds.
+	const timeout = 5 * time.Minute
+	const logEvery = 15 * time.Second
 
-	deadline := time.Now().Add(timeout)
+	start := time.Now()
+	deadline := start.Add(timeout)
+	nextLog := start.Add(logEvery)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		if n.hasExited() {
@@ -290,6 +296,13 @@ func (n *nodeProc) connect(ctx context.Context, cfg *config) (*rpcclient.Client,
 			lastErr = err
 		}
 
+		// A long wait can otherwise look indistinguishable from a hang.
+		if now := time.Now(); !now.Before(nextLog) {
+			mainLog.Infof("Still waiting for the node's RPC server to come "+
+				"up (%v so far)...", now.Sub(start).Round(time.Second))
+			nextLog = now.Add(logEvery)
+		}
+
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -300,19 +313,35 @@ func (n *nodeProc) connect(ctx context.Context, cfg *config) (*rpcclient.Client,
 		timeout, lastErr)
 }
 
-// Stop shuts the node down.  It uses the node's own stop RPC rather than a
-// signal: os.Interrupt cannot be delivered through Process.Signal on Windows,
-// and the Kill that would remain there risks the node's database.  This is one
-// code path on every platform.
+// Stop shuts the node down.  When an RPC client exists it uses the node's own
+// stop RPC rather than a signal: os.Interrupt cannot be delivered through
+// Process.Signal on Windows, and the Kill that would remain there risks the
+// node's database.  This is one code path on every platform.
 func (n *nodeProc) Stop() {
-	if n.rpc != nil {
+	wait := 30 * time.Second
+	switch {
+	case n.rpc != nil:
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if _, err := n.rpc.RawRequest(ctx, "stop", nil); err != nil {
 			mainLog.Warnf("Failed to ask the node to stop: %v", err)
 		}
 		cancel()
 		n.rpc.Shutdown()
+	case n.cmd != nil && n.cmd.Process != nil:
+		// connect never got far enough to hand back a client -- it failed, or
+		// the user interrupted the run during the node's startup window -- so
+		// nothing was ever asked to stop.  Ask now by signal rather than
+		// sitting through the full wait below for a shutdown nobody
+		// requested.  os.Interrupt cannot be delivered through Process.Signal
+		// on Windows, so there we just fall through to the shorter wait.
+		if runtime.GOOS != "windows" {
+			if err := n.cmd.Process.Signal(os.Interrupt); err != nil {
+				mainLog.Warnf("Failed to interrupt the node: %v", err)
+			}
+		}
+		wait = 5 * time.Second
 	}
+
 	if n.cmd == nil || n.cmd.Process == nil {
 		return
 	}
@@ -320,7 +349,7 @@ func (n *nodeProc) Stop() {
 	select {
 	case <-n.exited:
 		mainLog.Info("The node shut down.")
-	case <-time.After(30 * time.Second):
+	case <-time.After(wait):
 		mainLog.Warn("The node did not shut down in time; killing it.")
 		n.cmd.Process.Kill()
 		<-n.exited
@@ -354,7 +383,7 @@ func (n *nodeProc) WaitSynced(ctx context.Context) error {
 		// The peer count is not decoration.  InitialBlockDownload is
 		// !chain.IsCurrent(), and IsCurrent never becomes true without peers,
 		// so a machine that cannot reach the network would otherwise sit at
-		// 0.0%% forever with nothing to explain why.
+		// 0.0% forever with nothing to explain why.
 		peers, err := n.rpc.GetConnectionCount(ctx)
 		if err != nil {
 			peers = 0
