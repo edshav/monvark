@@ -1,39 +1,33 @@
 # monvark
 
 `monvark` is a BLAKE3 OpenCL GPU miner for Monetarium. It mines solo, against
-a `mond` node's `getwork` RPC — there is no pool/stratum support. It works
-with both AMD and NVIDIA GPUs through OpenCL; there is no CUDA build.
-
-Fan control and temperature reporting are not part of this miner. Use
-`nvidia-smi` (NVIDIA) or `rocm-smi` (AMD) for that.
+a `mond` node's `getwork` RPC, on both AMD and NVIDIA GPUs: no pool/stratum,
+no CUDA, no fan control or temperature reporting — use `nvidia-smi` (NVIDIA)
+or `rocm-smi` (AMD) for those.
 
 ## Requirements
 
-- An AMD or nVidia GPU with a working OpenCL driver.  That is the only thing
-  you install.
-- A Monetarium address to be paid to.  Create one with
+- An AMD or nVidia GPU with a working OpenCL driver.
+- A Monetarium address to be paid to. Create one with
   [monetarium-wallet](https://github.com/monetarium/monetarium-wallet) on any
   machine — **the wallet does not need to run while mining, and should not be
-  installed on the mining machine at all.**  monvark needs the address as a
+  installed on the mining machine at all.** monvark needs the address as a
   string; it never holds keys.
 
-You do **not** need to install or configure a node.  monvark ships with `mond`
+You do **not** need to install or configure a node. monvark ships with `mond`
 and starts, supervises and shuts down its own, using a loopback port and
-credentials it generates.  If this machine already runs a Monetarium node,
+credentials it generates. If this machine already runs a Monetarium node,
 monvark leaves it alone and takes an ephemeral P2P port for its own.
 
 ## Building
 
-Needs Go 1.23 or later; there are no build tags and no CUDA toolkit to install.
+Needs Go 1.23 or later.
 
 ```sh
 git clone <this repo> monvark
 cd monvark
 go build .
 ```
-
-The mining kernel is compiled into the resulting binary, so `monvark` can be
-run from any directory — it does not need to find a kernel file on disk.
 
 ## Checking your setup
 
@@ -50,17 +44,15 @@ actually hashes:
 ./monvark -B
 ```
 
-Add `-D <index>` (the index from `-l`) to benchmark one specific device. The
-reported hash rate is a cumulative average since the process started, not an
-instantaneous reading — let it run for at least five minutes before judging
-the number.
+`-D <index>` (the index from `-l`) benchmarks one device. The reported rate is
+a cumulative average since the process started — give it five minutes.
 
 ## Running it
 
 Download the archive for your platform from the releases page, check its
 SHA256 against the release notes, and unpack it wherever you like — it holds
-two files, `monvark` and `mond`, with no wrapping directory.  Keep them
-together: `monvark` looks for `mond` beside its own executable.  Then run it:
+two files, `monvark` and `mond`, with no wrapping directory. Keep them
+together: `monvark` looks for `mond` beside its own executable. Then run it:
 
 ```sh
 tar xzf monvark-v2.0.0-linux-amd64.tar.gz
@@ -69,19 +61,13 @@ tar xzf monvark-v2.0.0-linux-amd64.tar.gz
 
 On first run monvark asks once for the payout address, saves it to
 `~/.monvark/monvark.conf` with mode 0600, starts the node, waits for the chain
-to sync, and begins mining.  Later runs do not ask again.  Ctrl+C stops both.
+to sync, and begins mining. Later runs do not ask again. Ctrl+C stops both.
 
 To skip the question — under systemd or Docker, where there is nobody to ask —
 pass `--miningaddr` or put `miningaddr=` in the config file.
 
 Mainnet is the default network; pass `--testnet` or `--simnet` to mine on
 another one instead.
-
-If you have a `~/.monvark/monvark.conf` from before this version, delete any
-`rpcuser`, `rpcpass`, `rpcserver`, `rpccert`, `proxy`, `proxyuser` and
-`proxypass` lines from it before running: those options no longer exist, and
-monvark refuses to start with an unknown option in its config file rather than
-silently ignore it.
 
 What ends up in monvark's data directory — `~/.monvark/` on Linux,
 `%LOCALAPPDATA%\Monvark` on Windows:
@@ -94,12 +80,8 @@ node/          the node's data directory and logs
 ```
 
 Once, on the first block you find, monvark reads it back off the chain and
-confirms the coinbase paid you.  Note that `CoinbaseMaturity` is 256, so the
+confirms the coinbase paid you. Note that `CoinbaseMaturity` is 256, so the
 reward is not spendable immediately.
-
-The check confirms the address and catches configuration faults; it is not a
-defence against a tampered `mond`, since a hostile node can lie on any RPC.
-The archive's SHA256 is what covers that — verify it.
 
 ## Windows
 
@@ -108,24 +90,16 @@ The Windows build is **unsigned**, so the first run takes three prompts:
 1. SmartScreen shows "Windows protected your PC" — choose **More info**, then
    **Run anyway**.
 2. Defender may quarantine the binary; miners are flagged by category rather
-   than behaviour.  Restore it and add an exclusion for the folder you
+   than behaviour. Restore it and add an exclusion for the folder you
    unpacked into.
 3. Windows Firewall asks about network access when the node opens its P2P
-   port.  Allow it, or the node will not find peers and will never finish
+   port. Allow it, or the node will not find peers and will never finish
    syncing.
-
-Verify the archive's SHA256 against the release notes before doing any of this:
-
-```powershell
-Get-FileHash monvark-v2.0.0-windows-amd64.zip -Algorithm SHA256
-```
 
 ## Tuning
 
-- `--intensity` — sets the work size for one kernel launch, as `2^intensity`
-  (range 8-31). It does **not** throttle the device or reduce heat: the mining
-  loop has no sleep and runs the GPU at 100% duty cycle regardless of
-  intensity.
+- `--intensity` — the work size for one kernel launch, as `2^intensity`
+  (range 8-31). Not a throttle: the mining loop never sleeps, whatever it is.
 - `--worksize` — an explicit work size instead of a power of two; overrides
   `--intensity`.
 - `--autocalibrate` — when neither of the above is set, monvark sizes the
@@ -153,18 +127,10 @@ curl http://localhost:3333/
   "started": 1504453881,
   "uptime": 6,
   "payoutAddress": "MsMkhrc1z67m8iE56tFkDavsoHjeDiHFEwf",
-  "devices": [{
-    "index": 0,
-    "deviceName": "GeForce GT 750M",
-    "hashRate": 110127366.53846154,
-    "hashRateFormatted": "110.13 Mh/s",
-    "started": 1504453880
-  }]
+  "devices": [{ "index": 0, "deviceName": "GeForce GT 750M", "hashRate": 110127366.53846154,
+                "hashRateFormatted": "110.13 Mh/s", "started": 1504453880 }]
 }
 ```
-
-`payoutAddress` is omitted under `-B`, since benchmark mode has no payout to
-report.
 
 ## Credits
 
