@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -41,12 +42,22 @@ type Miner struct {
 	payoutAddr   string
 	payoutScript string
 	payeeChecked bool
+
+	// workMtx guards currentWork, the newest work handed to the devices.
+	// expiryThread reads it to decide whether pushed work has gone stale.
+	workMtx     sync.Mutex
+	currentWork *work.Work
+
+	// cancel stops the miner's context, which is how a fatal condition
+	// discovered by a background thread ends the run.  Run sets it before it
+	// starts any thread that reads it, so it is never nil where it is called.
+	cancel context.CancelFunc
 }
 
 // onSoloWork prepares the provided getwork-based work data, which might have
 // either come from getwork directly or from asynchronous work notifications,
 // and updates all of the provided devices with that prepared work.
-func onSoloWork(ctx context.Context, data, target []byte, reason string, devices []*Device) {
+func onSoloWork(ctx context.Context, data, target []byte, reason string, m *Miner) {
 	minrLog.Debugf("Work received: (data: %x, target: %x, reason: %s)", data,
 		target, reason)
 
@@ -65,13 +76,18 @@ func onSoloWork(ctx context.Context, data, target []byte, reason string, devices
 		TimeReceived: uint32(time.Now().Unix()),
 	}
 
-	for _, d := range devices {
+	m.workMtx.Lock()
+	m.currentWork = w
+	m.workMtx.Unlock()
+
+	for _, d := range m.devices {
 		d.SetWork(ctx, w)
 	}
 }
 
 func newSoloMiner(ctx context.Context, devices []*Device) (*Miner, error) {
-	var rpc *rpcclient.Client
+	m := &Miner{devices: devices}
+
 	ntfnHandlers := rpcclient.NotificationHandlers{
 		OnBlockConnected: func(blockHeader []byte, transactions [][]byte) {
 			minrLog.Infof("Block connected: %x (%d transactions)", blockHeader, len(transactions))
@@ -80,7 +96,7 @@ func newSoloMiner(ctx context.Context, devices []*Device) (*Miner, error) {
 			minrLog.Infof("Block disconnected: %x", blockHeader)
 		},
 		OnWork: func(data, target []byte, reason string) {
-			onSoloWork(ctx, data, target, reason, devices)
+			onSoloWork(ctx, data, target, reason, m)
 		},
 	}
 	// Connect to local dcrd RPC server using websockets.
@@ -100,7 +116,7 @@ func newSoloMiner(ctx context.Context, devices []*Device) (*Miner, error) {
 		ProxyUser:    cfg.ProxyUser,
 		ProxyPass:    cfg.ProxyPass,
 	}
-	rpc, err = rpcclient.New(connCfg, &ntfnHandlers)
+	rpc, err := rpcclient.New(connCfg, &ntfnHandlers)
 	if err != nil {
 		return nil, err
 	}
@@ -114,11 +130,8 @@ func newSoloMiner(ctx context.Context, devices []*Device) (*Miner, error) {
 		rpc.Shutdown()
 		return nil, err
 	}
-	m := &Miner{
-		devices: devices,
-		rpc:     rpc,
-	}
 
+	m.rpc = rpc
 	return m, nil
 }
 
@@ -170,7 +183,7 @@ func NewMiner(ctx context.Context, devices []*Device, workDone chan []byte, payo
 		m.rpc.Shutdown()
 		return nil, fmt.Errorf("unable to decode work target: %w", err)
 	}
-	onSoloWork(ctx, data, target, "initialwork", devices)
+	onSoloWork(ctx, data, target, "initialwork", m)
 
 	return m, nil
 }
@@ -199,6 +212,10 @@ func (m *Miner) workSubmitThread(ctx context.Context) {
 
 			if err := m.checkPayee(ctx, &hash); err != nil {
 				minrLog.Criticalf("%v", err)
+				// Stopping the submit thread alone would leave every device
+				// hashing at full power for a payout we have just proved is
+				// not ours, so end the run.
+				m.cancel()
 				return
 			}
 		}
@@ -241,6 +258,90 @@ func (m *Miner) checkPayee(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
+// workExpiry is how long work may go unrefreshed before the guarded GetWork
+// path is polled.
+//
+// The node regenerates a template 30 seconds after new transactions arrive, but
+// on a chain with an empty mempool there is no regen and therefore no push, so
+// work arrives on new blocks alone -- at a five minute target, Poisson
+// distributed.  Fifteen minutes is three times that, so it fires on roughly 5%
+// of healthy gaps and each firing is one cheap RPC call.
+const workExpiry = 15 * time.Minute
+
+// workStale reports whether work received at the given unix time is older than
+// bound.  Work that was never received is not stale: benchmark mode never sets
+// it, and there is nothing yet to have gone stale.
+func workStale(received uint32, now time.Time, bound time.Duration) bool {
+	if received == 0 {
+		return false
+	}
+	return now.Sub(time.Unix(int64(received), 0)) > bound
+}
+
+// expiryThread re-issues GetWork when no pushed work has arrived within the
+// bound.  It never stops the devices: the poll's own result already separates a
+// broken push path from a quiet chain, so a stop would convey nothing while
+// costing real hashrate.  A GetWork that keeps failing means an unhealthy node,
+// which is handled by exiting rather than by inventing a device pause.
+func (m *Miner) expiryThread(ctx context.Context) {
+	defer m.wg.Done()
+
+	const maxFailures = 3
+
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+
+	failures := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+
+		m.workMtx.Lock()
+		current := m.currentWork
+		m.workMtx.Unlock()
+		if current == nil || !workStale(current.TimeReceived, time.Now(), workExpiry) {
+			continue
+		}
+
+		result, err := m.rpc.GetWork(ctx)
+		if err != nil {
+			failures++
+			minrLog.Warnf("No work for over %v and GetWork failed (%d of %d "+
+				"before giving up): %v", workExpiry, failures, maxFailures, err)
+			if failures >= maxFailures {
+				minrLog.Criticalf("The node has not served work for %v; "+
+					"shutting down", time.Duration(maxFailures)*workExpiry)
+				m.cancel()
+			}
+			continue
+		}
+		failures = 0
+
+		data, err := hex.DecodeString(result.Data)
+		if err != nil {
+			minrLog.Errorf("Unable to decode work data: %v", err)
+			continue
+		}
+		target, err := hex.DecodeString(result.Target)
+		if err != nil {
+			minrLog.Errorf("Unable to decode work target: %v", err)
+			continue
+		}
+
+		if bytes.Equal(data, current.Data[:len(data)]) {
+			minrLog.Debugf("No new work for %v; the chain is quiet and the "+
+				"node agrees", workExpiry)
+		} else {
+			minrLog.Warnf("No pushed work for %v; the push path had stalled "+
+				"and polling recovered it", workExpiry)
+		}
+		onSoloWork(ctx, data, target, "expiry", m)
+	}
+}
+
 func (m *Miner) printStatsThread(ctx context.Context) {
 	defer m.wg.Done()
 
@@ -267,6 +368,10 @@ func (m *Miner) printStatsThread(ctx context.Context) {
 }
 
 func (m *Miner) Run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	m.cancel = cancel
+
 	m.wg.Add(len(m.devices))
 
 	for _, d := range m.devices {
@@ -280,6 +385,11 @@ func (m *Miner) Run(ctx context.Context) {
 
 	m.wg.Add(1)
 	go m.workSubmitThread(ctx)
+
+	if !cfg.Benchmark {
+		m.wg.Add(1)
+		go m.expiryThread(ctx)
+	}
 
 	if cfg.Benchmark {
 		minrLog.Warn("Running in BENCHMARK mode! No real mining taking place!")

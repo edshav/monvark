@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	chainjson "github.com/monetarium/monetarium-node/rpc/jsonrpc/types"
 )
@@ -93,5 +94,39 @@ func TestCoinbasePays(t *testing.T) {
 			t.Errorf("%s: coinbasePays = %v, want %v", test.name, got,
 				test.want)
 		}
+	}
+}
+
+func TestWorkStale(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	bound := 15 * time.Minute
+
+	fresh := uint32(now.Add(-1 * time.Minute).Unix())
+	if workStale(fresh, now, bound) {
+		t.Error("work one minute old reported stale")
+	}
+
+	// The bound is three times the five-minute block target, so a healthy
+	// quiet chain trips it on roughly 5% of gaps and each trip is harmless.
+	borderline := uint32(now.Add(-14 * time.Minute).Unix())
+	if workStale(borderline, now, bound) {
+		t.Error("work inside the bound reported stale")
+	}
+
+	old := uint32(now.Add(-16 * time.Minute).Unix())
+	if !workStale(old, now, bound) {
+		t.Error("work past the bound not reported stale")
+	}
+
+	// Work that has never been received is not stale: there is nothing to
+	// have gone stale yet, and benchmark mode never sets it.
+	if workStale(0, now, bound) {
+		t.Error("unset work reported stale")
+	}
+
+	// bound itself must matter: the same work that is stale under the
+	// 15-minute bound is not stale under a longer one.
+	if workStale(old, now, 20*time.Minute) {
+		t.Error("work reported stale under a longer bound")
 	}
 }
