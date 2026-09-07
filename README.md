@@ -10,14 +10,11 @@ readout; use `nvidia-smi` (NVIDIA) or `rocm-smi` (AMD) for those.
 
 ## What you need
 
-- **A GPU with a working OpenCL driver**, AMD or NVIDIA. monvark runs the card
-  at a 100% duty cycle for as long as it is up, so don't plan on using it for
-  anything else — or turn that down with `--dutycycle`, below.
-- **A Monetarium address to be paid to.** Create one with
-  [monetarium-wallet](https://github.com/monetarium/monetarium-wallet) on some
-  other machine — the wallet is not needed while mining and should not be
-  installed on the rig. monvark only ever sees the address as a string; it
-  never holds keys.
+**A Monetarium address to be paid to.** Create one with
+[monetarium-wallet](https://github.com/monetarium/monetarium-wallet) on some
+other machine — the wallet is not needed while mining and should not be
+installed on the rig. monvark only ever sees the address as a string; it never
+holds keys.
 
 You do **not** need to install or run a node. Every release archive contains
 `mond` next to `monvark`, and monvark starts, supervises and shuts down its
@@ -25,8 +22,8 @@ own node on a loopback RPC port with credentials it generates. If this machine
 already runs a Monetarium node, monvark leaves it alone and takes an ephemeral
 P2P port for its own.
 
-Binaries are published for **Linux x86-64** and **Windows x86-64**. macOS is
-not shipped but runs fine from source — see [macOS](#macos) below.
+Binaries are published for **Linux x86-64** and **Windows x86-64**; on macOS
+you [build from source](#macos).
 
 ## Download and run
 
@@ -35,21 +32,22 @@ Grab the archive for your platform from the
 the SHA256 of its archives; check it before unpacking. The archive holds two
 files, `monvark` and `mond`, with no wrapping directory — **keep them
 together**, because monvark looks for `mond` beside its own executable.
+Substitute the tag you downloaded for `<version>` below.
 
 ### Linux
 
 ```sh
-sha256sum monvark-v2.1.0-linux-amd64.tar.gz        # compare with the release notes
+sha256sum monvark-<version>-linux-amd64.tar.gz        # compare with the release notes
 mkdir -p ~/monvark
-tar -C ~/monvark -xzf monvark-v2.1.0-linux-amd64.tar.gz
+tar -C ~/monvark -xzf monvark-<version>-linux-amd64.tar.gz
 ~/monvark/monvark
 ```
 
 ### Windows
 
 ```powershell
-Get-FileHash .\monvark-v2.1.0-windows-amd64.zip -Algorithm SHA256
-Expand-Archive .\monvark-v2.1.0-windows-amd64.zip -DestinationPath C:\monvark
+Get-FileHash .\monvark-<version>-windows-amd64.zip -Algorithm SHA256
+Expand-Archive .\monvark-<version>-windows-amd64.zip -DestinationPath C:\monvark
 C:\monvark\monvark.exe
 ```
 
@@ -86,11 +84,9 @@ quarantine flag first:
 `xattr -d com.apple.quarantine monetarium-node-darwin-*`.
 
 Apple deprecated OpenCL back in 10.14, but the framework is still present and
-monvark loads it. Two things to expect: `-l` lists the CPU and the integrated
-GPU as OpenCL devices alongside the discrete card, so pass `--devices` with the
-index you actually want; and a laptop heat-soaks, so the reported rate falls
-over the first several minutes and settles well below the first number you see.
-Verified on an Intel Mac with a Radeon Pro. Apple Silicon compiles and loads the
+monvark loads it. `-l` lists the CPU and the integrated GPU as OpenCL devices
+alongside the discrete card, so pass `--devices` with the index you actually
+want. Verified on an Intel Mac with a Radeon Pro. Apple Silicon compiles and loads the
 same framework, but has not been run.
 
 ### What happens on the first run
@@ -106,7 +102,7 @@ To skip the question — under systemd or Docker, where there is nobody to ask �
 pass `--miningaddr` or put `miningaddr=` in the config file.
 
 Mainnet is the default. `--testnet` or `--simnet` mine on another network
-instead (see the note under Troubleshooting: those need `--addpeer`).
+instead.
 
 Once, on the first block you find, monvark reads the block back off the chain
 and confirms its coinbase paid you. Note that `CoinbaseMaturity` is 256 blocks,
@@ -125,43 +121,15 @@ DEV #1: Intel(R) UHD Graphics 630
 DEV #2: AMD Radeon Pro 5300M Compute Engine
 ```
 
-Run that as-is on a machine you are also sitting at and it can go unresponsive.
-A GPU has no preemptive scheduler: once a kernel is running it runs to the end,
-and every frame your desktop wants to draw waits behind it in the same queue.
-Put that on the adapter driving the display and the screen stops repainting —
-the machine looks frozen even though it is fine. Meanwhile the CPU device is
-taking every core, so there is little left to recover with.
-
-**On a machine you use, name the device you want.** Take the index of the
-discrete card from `-l`:
+A GPU kernel cannot be preempted, so the display adapter stops repainting while
+one runs and the machine looks frozen. **On a machine you use, name the discrete
+card** by its index from `-l`:
 
 ```sh
 ./monvark --devices=2
 ```
 
-You give up very little: the discrete GPU does the overwhelming majority of the
-hashing anyway, and you get the CPU and the display back. Put `devices=2` in
-`monvark.conf` so you don't have to remember the flag.
-
-**If one card still runs too hot or too loud, throttle it**:
-
-```sh
-./monvark --devices=2 --dutycycle=50
-```
-
-The device then hashes half the time and idles the other half, at roughly half
-the hashrate and heat. See [Tuning](#tuning).
-
-**On a dedicated rig you want neither flag.** Nothing else is competing for the
-machine, and every device found is one more hashing.
-
 ## Checking your setup
-
-List the OpenCL devices monvark can see:
-
-```sh
-./monvark -l
-```
 
 Run a benchmark that needs no node and submits nothing, to confirm a device
 actually hashes:
@@ -205,12 +173,11 @@ and `./monvark -h` for everything.
   whole machine](#dont-hand-it-the-whole-machine).
 - `--dutycycle` — the percentage of the time a device hashes, 1–100 (default
   100). Below 100 it idles between kernel launches for as long as the arithmetic
-  needs: at 50 it idles exactly as long as each launch took, at 25 three times
-  as long. This is the only setting that actually throttles a device. A found
-  block is still submitted immediately, and the idle wait ends at once on
-  Ctrl+C. New work is only picked up once the idle window is over, so a very low
-  duty cycle means hashing a stale template for that much longer — at the
-  default 500 ms per launch, `--dutycycle=10` idles 4.5 s at a time.
+  needs: at 50 it idles exactly as long as each launch took. This is the only
+  setting that actually throttles a device. A found block is still submitted
+  immediately, and the idle wait ends at once on Ctrl+C. New work is only picked
+  up once the idle window is over, so a very low duty cycle means hashing a
+  stale template for that much longer.
 - `--opencl-lib` — full path to the OpenCL library, for installations the
   built-in search does not cover.
 
@@ -262,7 +229,7 @@ RUN apt-get update \
  && mkdir -p /etc/OpenCL/vendors \
  && echo libnvidia-opencl.so.1 > /etc/OpenCL/vendors/nvidia.icd
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ADD monvark-v2.1.0-linux-amd64.tar.gz /opt/monvark/
+ADD monvark-<version>-linux-amd64.tar.gz /opt/monvark/
 ENTRYPOINT ["/opt/monvark/monvark"]
 ```
 
@@ -281,9 +248,6 @@ docker run -d --name monvark --gpus all --stop-timeout 60 \
   Docker's default of 10 seconds would SIGKILL it mid-shutdown.
 - **No published ports are needed.** The node dials out; inbound P2P is
   optional. Add `-p 3333:3333` only if you also pass `--apilisten=:3333`.
-- **AMD:** drop the two NVIDIA lines, base the image on `rocm/dev-ubuntu-22.04`
-  (it brings its own OpenCL runtime), and swap `--gpus all` for
-  `--device=/dev/kfd --device=/dev/dri --group-add video`.
 
 ### systemd
 
@@ -346,8 +310,6 @@ to ask for the address but is running under a service manager. Pass
 
 For more detail on any of these, `-d debug` raises the log level.
 
----
-
 ## Building from source
 
 Needs Go 1.23 or later. `go build .` is the whole build: there are no build
@@ -377,8 +339,7 @@ work data is laid out, and which parts (the `blake3.cl` kernel, the BLAKE256
 block-identity hash, the `dcr*` package names) are deliberate and should be
 left alone.
 
-Two things worth knowing before you measure anything: `Device.Status()` reports
-a cumulative average, not a current rate, and on a thermally limited card the
+Worth knowing before you measure anything: on a thermally limited card the
 benchmark varies enough between runs that it cannot detect a code regression.
 Use `device_test.go`'s GPU/host hash-agreement check for correctness instead.
 
