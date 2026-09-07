@@ -9,16 +9,13 @@ import (
 )
 
 type MinerStatus struct {
-	ValidShares     uint64  `json:"validShares"`
-	StaleShares     uint64  `json:"staleShares"`
-	InvalidShares   uint64  `json:"invalidShares"`
-	TotalShares     uint64  `json:"totalShares"`
-	SharesPerMinute float64 `json:"sharesPerMinute"`
-	Started         uint32  `json:"started"`
-	Uptime          uint32  `json:"uptime"`
+	ValidShares   uint64 `json:"validShares"`
+	InvalidShares uint64 `json:"invalidShares"`
+	TotalShares   uint64 `json:"totalShares"`
+	Started       uint32 `json:"started"`
+	Uptime        uint32 `json:"uptime"`
 
 	Devices []*DeviceStatus `json:"devices"`
-	Pool    *PoolStatus     `json:"pool,omitempty"`
 }
 
 type DeviceStatus struct {
@@ -29,15 +26,7 @@ type DeviceStatus struct {
 	HashRate          float64 `json:"hashRate"`
 	HashRateFormatted string  `json:"hashRateFormatted"`
 
-	FanPercent  uint32 `json:"fanPercent"`
-	Temperature uint32 `json:"temperature"`
-
 	Started uint32 `json:"started"`
-}
-
-type PoolStatus struct {
-	Started uint32 `json:"started"`
-	Uptime  uint32 `json:"uptime"`
 }
 
 var (
@@ -68,37 +57,20 @@ func getMinerStatus(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if !cfg.Benchmark {
-		valid, invalid, stale, total, sharesPerMinute := m.Status()
-
+		valid, invalid, total := m.Status()
 		ms.ValidShares = valid
 		ms.InvalidShares = invalid
-		ms.StaleShares = stale
 		ms.TotalShares = total
-		ms.SharesPerMinute = sharesPerMinute
-
-		if cfg.Pool != "" {
-			ms.Pool = &PoolStatus{
-				Started: m.started,
-				Uptime:  uint32(time.Now().Unix()) - m.started,
-			}
-		}
 	}
 
 	for _, d := range m.devices {
-		d.UpdateFanTemp()
-
-		averageHashRate,
-			fanPercent,
-			temperature := d.Status()
-
+		hashRate := d.Status()
 		ms.Devices = append(ms.Devices, &DeviceStatus{
 			Index:             d.index,
 			DeviceName:        d.deviceName,
 			DeviceType:        d.deviceType,
-			HashRate:          averageHashRate,
-			HashRateFormatted: util.FormatHashRate(averageHashRate),
-			FanPercent:        fanPercent,
-			Temperature:       temperature,
+			HashRate:          hashRate,
+			HashRateFormatted: util.FormatHashRate(hashRate),
 			Started:           d.started,
 		})
 	}

@@ -6,18 +6,13 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"math"
 	"os"
-	"runtime"
-	"strconv"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -42,123 +37,6 @@ var zeroSlice = []cl.CL_uint{cl.CL_uint(0)}
 func appendBitfield(info, value cl.CL_bitfield, name string, str *string) {
 	if (info & value) != 0 {
 		*str += name
-	}
-}
-
-func amdgpuFanPercentToValue(percent uint32) uint32 {
-	value := AMDGPUFanFailSafe
-
-	calculatedValue := float64(AMDGPUFanMax) * float64(percent) / float64(100)
-
-	if calculatedValue > 0 {
-		value = uint32(calculatedValue)
-	} else {
-		minrLog.Errorf("amdgpuFanPercentToValue() failed; using failsafe "+
-			"value of %v", AMDGPUFanFailSafe)
-	}
-
-	return value
-}
-
-// validate that we can write to the AMDGPU sysfs fan path.
-func amdgpuFanPermissionsValid(index int) error {
-	path := amdgpuGetSysfsPath(index, "fan")
-
-	file, err := os.OpenFile(path, os.O_WRONLY, 0666)
-	file.Close()
-	if err != nil {
-		if os.IsPermission(err) {
-			return fmt.Errorf("path %v is not writable", path)
-		} else {
-			return fmt.Errorf("path %v unusable %w", path, err)
-		}
-	}
-
-	return nil
-}
-
-func amdgpuGetSysfsPath(index int, field string) string {
-	cardPath := fmt.Sprintf("%s%d", "/sys/class/drm/card", index)
-	driverPath := "/sys/module/amdgpu"
-
-	if field == "card" {
-		return cardPath
-	}
-	if field == "driver" {
-		return driverPath
-	}
-
-	// find hwmon/hwmon<number>
-	hwmonBasePath := fmt.Sprintf("%s%d%s", "/sys/class/drm/card", index, "/device/hwmon/")
-	hwmonName := ""
-
-	// open hwmon base path and scan for the numbered entry
-	files, err := os.ReadDir(hwmonBasePath)
-	if err != nil {
-		minrLog.Errorf("unable to read AMDGPU sysfs dir %v: %v", hwmonBasePath,
-			err)
-		return "unknown"
-	}
-
-	for _, f := range files {
-		// we should only find one entry but the API may not be stable
-		if strings.Contains(f.Name(), "hwmon") {
-			hwmonName = f.Name()
-		}
-	}
-
-	if hwmonName == "" {
-		minrLog.Errorf("unable to find full hwmon path")
-		return "unknown"
-	}
-
-	hwmonFullPath := fmt.Sprintf("%s/%s/", hwmonBasePath, hwmonName)
-
-	switch field {
-	case "fan":
-		return hwmonFullPath + "pwm1"
-	case "temp":
-		return hwmonFullPath + "temp1_input"
-	}
-
-	return "unknown"
-}
-
-func fanControlSet(index int, fanCur uint32, tempTargetType string,
-	fanChangeLevel string) {
-	fanAdjustmentPercent := FanControlAdjustmentSmall
-	fanNewPercent := uint32(0)
-	fanNewValue := uint32(0)
-	if fanChangeLevel == ChangeLevelLarge {
-		fanAdjustmentPercent = FanControlAdjustmentLarge
-	}
-	minrLog.Tracef("DEV #%d fanControlSet fanCur %v tempTargetType %v "+
-		"fanChangeLevel %v", index, fanCur, tempTargetType, fanChangeLevel)
-
-	switch tempTargetType {
-	// Decrease the temperature by increasing the fan speed
-	case TargetLower:
-		fanNewPercent = fanCur + fanAdjustmentPercent
-		fanNewValue = amdgpuFanPercentToValue(fanNewPercent)
-	// Increase the temperature by decreasing the fan speed
-	case TargetHigher:
-		fanNewPercent = fanCur - fanAdjustmentPercent
-		fanNewValue = amdgpuFanPercentToValue(fanNewPercent)
-	}
-
-	fanPath := amdgpuGetSysfsPath(index, "fan")
-
-	minrLog.Tracef("DEV #%d need to %v temperature; adjusting fan from "+
-		"fanCur %v%% to fanNewPercent %v%% by writing fanNewValue %v to %v",
-		index, strings.ToLower(tempTargetType), fanCur, fanNewPercent,
-		fanNewValue, fanPath)
-	err := deviceStatsWriteSysfsEntry(fanPath, fanNewValue)
-	if err != nil {
-		minrLog.Errorf("DEV #%d unable to adjust fan: %v", index, err)
-	} else {
-		minrLog.Infof("DEV #%d successfully adjusted fan from %v%% to %v%% to "+
-			"%v temp", index, fanCur, fanNewPercent,
-			strings.ToLower(tempTargetType))
 	}
 }
 
@@ -198,29 +76,19 @@ func clError(status cl.CL_int, f string) error {
 }
 
 type Device struct {
-	// The following variables must only be used atomically.
-	fanPercent  uint32
-	temperature uint32
-
 	sync.Mutex
 	index int
 
 	// Items for OpenCL device
-	platformID               cl.CL_platform_id
-	deviceID                 cl.CL_device_id
-	deviceName               string
-	deviceType               string
-	context                  cl.CL_context
-	queue                    cl.CL_command_queue
-	outputBuffer             cl.CL_mem
-	program                  cl.CL_program
-	kernel                   cl.CL_kernel
-	fanControlActive         bool
-	fanControlLastTemp       uint32
-	fanControlLastFanPercent uint32
-	fanTempActive            bool
-	kind                     string
-	tempTarget               uint32
+	platformID   cl.CL_platform_id
+	deviceID     cl.CL_device_id
+	deviceName   string
+	deviceType   string
+	context      cl.CL_context
+	queue        cl.CL_command_queue
+	outputBuffer cl.CL_mem
+	program      cl.CL_program
+	kernel       cl.CL_kernel
 
 	workSize uint32
 
@@ -257,81 +125,6 @@ type Device struct {
 	allDiffOneShares uint64
 	validShares      uint64
 	invalidShares    uint64
-}
-
-// If the device order and OpenCL index are ever not the same then we can
-// implement topology finding code:
-// https://github.com/Oblomov/clinfo/blob/master/src/clinfo.c#L1061-L1126
-func determineDeviceKind(index int, deviceType string) string {
-	deviceKind := DeviceKindUnknown
-
-	if deviceType == DeviceTypeCPU {
-		return deviceKind
-	}
-
-	switch runtime.GOOS {
-	case "linux":
-		// check if the AMDGPU driver is loaded
-		if _, err := os.Stat(amdgpuGetSysfsPath(index, "driver")); err == nil {
-			// make sure a sysfs entry exists for the index of this device
-			if _, err := os.Stat(amdgpuGetSysfsPath(index, "card")); err == nil {
-				deviceKind = DeviceKindAMDGPU
-			}
-		}
-	}
-
-	return deviceKind
-}
-
-func deviceStats(index int) (uint32, uint32) {
-	fanPercent := deviceStatsReadSysfsEntry(amdgpuGetSysfsPath(index, "fan"))
-	fanPercentFloat := float64(fanPercent) / float64(AMDGPUFanMax) * float64(100)
-	fanPercent = uint32(fanPercentFloat)
-	temperature := deviceStatsReadSysfsEntry(amdgpuGetSysfsPath(index, "temp")) / AMDTempDivisor
-
-	return fanPercent, temperature
-}
-
-func deviceStatsReadSysfsEntry(path string) uint32 {
-	res := uint32(0)
-	dataRaw := ""
-
-	f, err := os.Open(path)
-	if err != nil {
-		if err != nil {
-			minrLog.Errorf("unable to open %v", path)
-			return res
-		}
-	}
-	defer f.Close()
-
-	r := bufio.NewScanner(f)
-	for r.Scan() {
-		dataRaw = string(r.Bytes())
-	}
-	if err := r.Err(); err != nil {
-		return res
-	}
-
-	dataInt, err := strconv.Atoi(dataRaw)
-	if err != nil {
-		minrLog.Errorf("unable to convert to int %v", err)
-		return res
-	}
-
-	res = uint32(dataInt)
-
-	return res
-}
-
-func deviceStatsWriteSysfsEntry(path string, value uint32) error {
-	stringValue := strconv.Itoa(int(value)) + "\n"
-	err := os.WriteFile(path, []byte(stringValue), 0644)
-	if err != nil {
-		return fmt.Errorf("unable to write %v to %v: %w", value, path, err)
-	}
-
-	return nil
 }
 
 func getCLPlatforms() ([]cl.CL_platform_id, error) {
@@ -395,16 +188,13 @@ func ListDevices() {
 func NewDevice(index int, order int, platformID cl.CL_platform_id, deviceID cl.CL_device_id,
 	workDone chan []byte) (*Device, error) {
 	d := &Device{
-		index:       index,
-		platformID:  platformID,
-		deviceID:    deviceID,
-		deviceName:  getDeviceInfo(deviceID, cl.CL_DEVICE_NAME, "CL_DEVICE_NAME"),
-		deviceType:  getDeviceInfo(deviceID, cl.CL_DEVICE_TYPE, "CL_DEVICE_TYPE"),
-		newWork:     make(chan *work.Work, 5),
-		workDone:    workDone,
-		fanPercent:  0,
-		temperature: 0,
-		tempTarget:  0,
+		index:      index,
+		platformID: platformID,
+		deviceID:   deviceID,
+		deviceName: getDeviceInfo(deviceID, cl.CL_DEVICE_NAME, "CL_DEVICE_NAME"),
+		deviceType: getDeviceInfo(deviceID, cl.CL_DEVICE_TYPE, "CL_DEVICE_TYPE"),
+		newWork:    make(chan *work.Work, 5),
+		workDone:   workDone,
 	}
 
 	var status cl.CL_int
@@ -537,63 +327,6 @@ func NewDevice(index int, order int, platformID cl.CL_platform_id, deviceID cl.C
 	minrLog.Infof("DEV #%d: Work size set to %v ('intensity' %v)",
 		d.index, globalWorkSize, intensity)
 	d.workSize = globalWorkSize
-
-	// Determine the device/driver kind
-	d.kind = determineDeviceKind(d.index, d.deviceType)
-
-	switch d.kind {
-	case DeviceKindAMDGPU:
-		fanPercent, temperature := deviceStats(d.index)
-		// Newer cards will idle with the fan off so just check if we got
-		// a good temperature reading
-		if temperature != 0 {
-			atomic.StoreUint32(&d.fanPercent, fanPercent)
-			atomic.StoreUint32(&d.temperature, temperature)
-			d.fanTempActive = true
-		}
-	}
-
-	// Check if temperature target is specified
-	if len(cfg.TempTargetInts) > 0 {
-		// Apply the first setting as a global setting
-		d.tempTarget = cfg.TempTargetInts[0]
-
-		// Override with the per-device setting if it exists
-		for i := range cfg.TempTargetInts {
-			if i == order {
-				d.tempTarget = cfg.TempTargetInts[order]
-			}
-		}
-		d.fanControlActive = true
-	}
-
-	// validate that we can actually do fan control
-	fanControlNotWorking := false
-	if d.tempTarget > 0 {
-		// validate that fan control is supported
-		if !d.fanControlSupported(d.kind) {
-			return nil, fmt.Errorf("temperature target of %v for device #%v; "+
-				"fan control is not supported on device kind %v", d.tempTarget,
-				index, d.kind)
-		}
-		if !d.fanTempActive {
-			minrLog.Errorf("DEV #%d ignoring temperature target of %v; "+
-				"could not get initial %v read", index, d.tempTarget, d.kind)
-			fanControlNotWorking = true
-		}
-		if !fanControlNotWorking {
-			err := amdgpuFanPermissionsValid(index)
-			if err != nil {
-				minrLog.Errorf("DEV #%d ignoring temperature target of %v; "+
-					"%v", index, d.tempTarget, err)
-				fanControlNotWorking = true
-			}
-		}
-		if fanControlNotWorking {
-			d.tempTarget = 0
-			d.fanControlActive = false
-		}
-	}
 
 	return d, nil
 }
@@ -801,6 +534,4 @@ func (d *Device) Release() {
 	cl.CLReleaseCommandQueue(d.queue)
 	cl.CLReleaseMemObject(d.outputBuffer)
 	cl.CLReleaseContext(d.context)
-	// XXX need to check if/how the AMDGPU driver/device takes back
-	// automatic fan control like we do for ADL
 }

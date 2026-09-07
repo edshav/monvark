@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -14,7 +13,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/decred/gominer/stratum"
 	"github.com/decred/gominer/util"
 	"github.com/decred/gominer/work"
 	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
@@ -25,31 +23,14 @@ import (
 type Miner struct {
 	// The following variables must only be used atomically.
 	validShares   uint64
-	staleShares   uint64
 	invalidShares uint64
 
-	started          uint32
-	devices          []*Device
-	workDone         chan []byte
-	needsWorkRefresh chan struct{}
-	wg               sync.WaitGroup
-	pool             *stratum.Stratum
+	started  uint32
+	devices  []*Device
+	workDone chan []byte
+	wg       sync.WaitGroup
 
 	rpc *rpcclient.Client
-}
-
-func newStratum(devices []*Device) (*Miner, error) {
-	s, err := stratum.StratumConn(cfg.Pool, cfg.PoolUser, cfg.PoolPassword,
-		cfg.Proxy, cfg.ProxyUser, cfg.ProxyPass, Version, chainParams)
-	if err != nil {
-		return nil, err
-	}
-	m := &Miner{
-		devices:          devices,
-		pool:             s,
-		needsWorkRefresh: make(chan struct{}),
-	}
-	return m, nil
 }
 
 // onSoloWork prepares the provided getwork-based work data, which might have
@@ -144,13 +125,10 @@ func NewMiner(ctx context.Context) (*Miner, error) {
 	}
 
 	var m *Miner
-	switch {
-	case cfg.Benchmark:
+	if cfg.Benchmark {
 		m = newBenchmarkMiner(devices)
-	case cfg.Pool == "":
+	} else {
 		m, err = newSoloMiner(ctx, devices)
-	default:
-		m, err = newStratum(devices)
 	}
 	if err != nil {
 		return nil, err
@@ -165,27 +143,24 @@ func NewMiner(ctx context.Context) (*Miner, error) {
 		return m, nil
 	}
 
-	// Perform an initial call to getwork when solo mining so work is available
-	// immediately.
-	if cfg.Pool == "" {
-		workResult, err := m.rpc.GetWork(ctx)
-		if err != nil {
-			m.rpc.Shutdown()
-			return nil, fmt.Errorf("unable to retrieve initial work: %w", err)
-		}
-
-		data, err := hex.DecodeString(workResult.Data)
-		if err != nil {
-			m.rpc.Shutdown()
-			return nil, fmt.Errorf("unable to decode work data: %w", err)
-		}
-		target, err := hex.DecodeString(workResult.Target)
-		if err != nil {
-			m.rpc.Shutdown()
-			return nil, fmt.Errorf("unable to decode work target: %w", err)
-		}
-		onSoloWork(ctx, data, target, "initialwork", devices)
+	// Perform an initial call to getwork so work is available immediately.
+	workResult, err := m.rpc.GetWork(ctx)
+	if err != nil {
+		m.rpc.Shutdown()
+		return nil, fmt.Errorf("unable to retrieve initial work: %w", err)
 	}
+
+	data, err := hex.DecodeString(workResult.Data)
+	if err != nil {
+		m.rpc.Shutdown()
+		return nil, fmt.Errorf("unable to decode work data: %w", err)
+	}
+	target, err := hex.DecodeString(workResult.Target)
+	if err != nil {
+		m.rpc.Shutdown()
+		return nil, fmt.Errorf("unable to decode work target: %w", err)
+	}
+	onSoloWork(ctx, data, target, "initialwork", devices)
 
 	return m, nil
 }
@@ -198,78 +173,19 @@ func (m *Miner) workSubmitThread(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case data := <-m.workDone:
-			// Only use that is we are not using a pool.
-			if m.pool == nil {
-				// Solo
-				accepted, err := m.rpc.GetWorkSubmit(ctx, hex.EncodeToString(data))
-				if err != nil {
-					atomic.AddUint64(&m.invalidShares, 1)
-					minrLog.Errorf("failed to submit work: %w", err)
-					continue
-				} else if !accepted {
-					atomic.AddUint64(&m.invalidShares, 1)
-					minrLog.Error("work not accepted")
-					continue
-				}
-				atomic.AddUint64(&m.validShares, 1)
-				minrLog.Infof("Submitted work successfully: block hash %v",
-					chainhash.Hash(blake256.Sum256(data[:180])))
-			} else {
-				submitted, err := GetPoolWorkSubmit(data, m.pool)
-				if err != nil {
-					switch {
-					case errors.Is(err, stratum.ErrStratumStaleWork):
-						atomic.AddUint64(&m.staleShares, 1)
-						minrLog.Debugf("Share submitted to pool was stale")
-
-					default:
-						atomic.AddUint64(&m.invalidShares, 1)
-						minrLog.Errorf("Error submitting work to pool: %v", err)
-					}
-				} else {
-					if submitted {
-						minrLog.Debugf("Submitted work to pool successfully: %v",
-							submitted)
-					}
-
-					select {
-					case m.needsWorkRefresh <- struct{}{}:
-					case <-ctx.Done():
-					}
-				}
-			}
-		}
-	}
-}
-
-func (m *Miner) workRefreshThread(ctx context.Context) {
-	defer m.wg.Done()
-
-	t := time.NewTicker(100 * time.Millisecond)
-	defer t.Stop()
-
-	for {
-		// Stratum only code.
-		m.pool.Lock()
-		if m.pool.PoolWork.NewWork {
-			work, err := GetPoolWork(m.pool)
-			m.pool.Unlock()
+			accepted, err := m.rpc.GetWorkSubmit(ctx, hex.EncodeToString(data))
 			if err != nil {
-				minrLog.Errorf("Error in getpoolwork: %v", err)
-			} else {
-				for _, d := range m.devices {
-					d.SetWork(ctx, work)
-				}
+				atomic.AddUint64(&m.invalidShares, 1)
+				minrLog.Errorf("failed to submit work: %w", err)
+				continue
+			} else if !accepted {
+				atomic.AddUint64(&m.invalidShares, 1)
+				minrLog.Error("work not accepted")
+				continue
 			}
-		} else {
-			m.pool.Unlock()
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		case <-m.needsWorkRefresh:
+			atomic.AddUint64(&m.validShares, 1)
+			minrLog.Infof("Submitted work successfully: block hash %v",
+				chainhash.Hash(blake256.Sum256(data[:180])))
 		}
 	}
 }
@@ -282,41 +198,19 @@ func (m *Miner) printStatsThread(ctx context.Context) {
 
 	for {
 		if !cfg.Benchmark {
-			valid, rejected, stale, total, utility := m.Status()
-
-			if cfg.Pool != "" {
-				minrLog.Infof("Global stats: Accepted: %v, Rejected: %v, Stale: %v, Total: %v",
-					valid,
-					rejected,
-					stale,
-					total,
-				)
-				secondsElapsed := uint32(time.Now().Unix()) - m.started
-				if (secondsElapsed / 60) > 0 {
-					minrLog.Infof("Global utility (accepted shares/min): %v", utility)
-				}
-			} else {
-				minrLog.Infof("Global stats: Accepted: %v, Rejected: %v, Total: %v",
-					valid,
-					rejected,
-					total,
-				)
-			}
+			valid, rejected, total := m.Status()
+			minrLog.Infof("Global stats: Accepted: %v, Rejected: %v, Total: %v",
+				valid, rejected, total)
 		}
 
 		for _, d := range m.devices {
-			d.UpdateFanTemp()
 			d.PrintStats()
-			if d.fanControlActive {
-				d.fanControl()
-			}
 		}
 
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-		case <-m.needsWorkRefresh:
 		}
 	}
 }
@@ -342,9 +236,6 @@ func (m *Miner) Run(ctx context.Context) {
 		for _, d := range m.devices {
 			d.SetWork(ctx, work)
 		}
-	} else if m.pool != nil {
-		m.wg.Add(1)
-		go m.workRefreshThread(ctx)
 	}
 
 	m.wg.Add(1)
@@ -353,22 +244,9 @@ func (m *Miner) Run(ctx context.Context) {
 	m.wg.Wait()
 }
 
-func (m *Miner) Status() (uint64, uint64, uint64, uint64, float64) {
-	if cfg.Pool != "" {
-		valid := atomic.LoadUint64(&m.pool.ValidShares)
-		rejected := atomic.LoadUint64(&m.pool.InvalidShares)
-		stale := atomic.LoadUint64(&m.staleShares)
-		total := valid + rejected + stale
-
-		secondsElapsed := uint32(time.Now().Unix()) - m.started
-		utility := float64(valid) / (float64(secondsElapsed) / float64(60))
-
-		return valid, rejected, stale, total, utility
-	}
-
+// Status returns the miner's accepted, rejected and total share counts.
+func (m *Miner) Status() (uint64, uint64, uint64) {
 	valid := atomic.LoadUint64(&m.validShares)
 	rejected := atomic.LoadUint64(&m.invalidShares)
-	total := valid + rejected
-
-	return valid, rejected, 0, total, 0
+	return valid, rejected, valid + rejected
 }

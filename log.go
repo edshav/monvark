@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/decred/gominer/stratum"
 	"github.com/decred/slog"
 	"github.com/jrick/logrotate/rotator"
 )
@@ -42,18 +41,11 @@ var (
 
 	mainLog = backendLog.Logger("MAIN")
 	minrLog = backendLog.Logger("MINR")
-	poolLog = backendLog.Logger("POOL")
 )
-
-// Initialize package-global logger variables.
-func init() {
-	stratum.UseLogger(poolLog)
-}
 
 var subsystemLoggers = map[string]slog.Logger{
 	"MAIN": mainLog,
 	"MINR": minrLog,
-	"POOL": poolLog,
 }
 
 // initLogRotator initializes the logging rotater to write logs to logFile and

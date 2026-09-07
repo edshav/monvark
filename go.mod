@@ -3,9 +3,6 @@ module github.com/decred/gominer
 go 1.23
 
 require (
-	github.com/barnex/cuda5 v0.0.0-20171012184954-da30a9b287d8
-	github.com/davecgh/go-spew v1.1.1
-	github.com/decred/go-socks v1.1.0
 	github.com/decred/slog v1.2.0
 	github.com/jessevdk/go-flags v1.5.0
 	github.com/jrick/logrotate v1.0.0
@@ -15,7 +12,6 @@ require (
 	github.com/monetarium/monetarium-node/crypto/blake256 v1.3.9
 	github.com/monetarium/monetarium-node/dcrutil v1.3.9
 	github.com/monetarium/monetarium-node/rpcclient v1.3.9
-	github.com/monetarium/monetarium-node/wire v1.3.9
 )
 
 require (
@@ -23,6 +19,7 @@ require (
 	github.com/dchest/siphash v1.2.3 // indirect
 	github.com/decred/base58 v1.0.5 // indirect
 	github.com/decred/dcrd/crypto/blake256 v1.0.1 // indirect
+	github.com/decred/go-socks v1.1.0 // indirect
 	github.com/gorilla/websocket v1.5.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
 	github.com/monetarium/monetarium-node/blockchain/stake v1.3.8 // indirect
@@ -37,6 +34,7 @@ require (
 	github.com/monetarium/monetarium-node/gcs v1.3.8 // indirect
 	github.com/monetarium/monetarium-node/rpc/jsonrpc/types v1.3.8 // indirect
 	github.com/monetarium/monetarium-node/txscript v1.3.8 // indirect
+	github.com/monetarium/monetarium-node/wire v1.3.9 // indirect
 	golang.org/x/crypto v0.33.0 // indirect
 	golang.org/x/net v0.25.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
