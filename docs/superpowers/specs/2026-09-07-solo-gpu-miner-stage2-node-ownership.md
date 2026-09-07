@@ -87,6 +87,28 @@ rather than after a full chain sync. This is a change to the startup order that
 the stage 1 spec did not anticipate; §3.1 records why it is the full device
 build and not a cheap enumeration.
 
+**2.7 An already-running node is coexisted with, never killed and never
+auto-attached to.** A machine may already run a node for `monetarium-explorer`
+or for a wallet in RPC sync mode. monvark starts its own regardless, taking an
+ephemeral P2P port if the default is busy (§3.4).
+
+Killing the other node was considered and rejected outright: its ownership
+cannot be determined, killing it may not even be permitted, monvark would never
+restore it, and it solves nothing the port fallback does not solve without
+destroying anything.
+
+Auto-attaching to it was rejected for a sharper reason. Five of its six failure
+modes are loud and therefore harmless — the node's RPC server is disabled unless
+credentials are configured and that is the default (§7.10), its credentials live
+in its own config file, `generate=1` makes it refuse `getwork`, it may be on
+another network, and it may shut down mid-session. The sixth is silent: a
+`getwork` template pays the `miningaddr` of whichever node served it, no RPC
+exposes that address (§7.1), and our payee proof is post-hoc. An auto-attached
+node belonging to somebody else would therefore consume hours of hashrate before
+the first mined block revealed it. Auto-attaching means silently guessing about
+the destination of the money, which is the one thing this design exists to
+settle.
+
 ---
 
 ## 3. Design
@@ -201,6 +223,16 @@ and the README's opening both point at `monetarium-wallet`. monvark never
 generates a key: a private key on a mining rig is precisely what this design
 avoids.
 
+**The wallet is not a runtime dependency, and the README says so.** monvark
+needs an address *string*, not a running program. The wallet is used once, on
+any machine, to produce it; it does not need to run during mining and should not
+be installed on the rig at all, since keys on a machine running unattended GPU
+workloads is the exposure this design is built to avoid. The complete
+requirement list for a fresh rig is an OpenCL driver and one string obtained
+elsewhere — no node to install, no wallet to run, no service to configure. That
+question is invited by the design and belongs in the README's first paragraph
+rather than being discovered at the prompt.
+
 ### 3.4 Node ownership
 
 **Locating the binary.** `mond`, or `mond.exe` on Windows, in the same directory
@@ -211,11 +243,31 @@ does not call it `mond` — `go build .` in the node repository yields
 (§7.6). The name `mond` is one we impose when assembling our own archive, which
 is why the lookup rule is written down rather than assumed.
 
-**The port** is chosen by binding `127.0.0.1:0`, reading the assigned port, and
-closing the listener before the node binds it. There is a small window between
-close and bind in which another process could take the port; it is local,
-brief, and the standard way to do this. The node failing to bind is a clear
-startup error, not a silent misbehaviour.
+**The RPC port** is chosen by binding `127.0.0.1:0`, reading the assigned port,
+and closing the listener before the node binds it. There is a small window
+between close and bind in which another process could take the port; it is
+local, brief, and the standard way to do this. The node failing to bind is a
+clear startup error, not a silent misbehaviour.
+
+**The P2P port must be de-conflicted too, or an existing node blocks startup.**
+`initListeners` warns and skips a P2P address it cannot bind, but the caller
+then fails hard if every address failed — `errors.New("no valid listen address")`
+(§7.11). The node's default P2P port is 9508 on all interfaces, so a machine
+already running a Monetarium node would kill monvark's child at startup.
+
+monvark therefore test-binds the default P2P port for the active network before
+launching:
+
+- **free** — pass no `--listen`, so the node listens on 9508 as usual and
+  contributes fully to the network;
+- **busy** — pass `--listen=:0`, so the node takes a random free port, and warn
+  that it is doing so. An explicit port survives `normalizeAddresses` intact
+  (§7.12), and `net.Listen` on port 0 assigns a free one.
+
+A node on an ephemeral port still dials out, syncs, validates and relays to its
+outbound peers; it simply cannot accept inbound connections. That is already the
+situation for any rig behind NAT without a forwarded port, which is most of
+them. The user is never blocked and the other node is never touched.
 
 **Credentials** are 32 bytes from `crypto/rand`, hex-encoded, fresh each start.
 There is nothing to preserve between runs, so `mond.conf` is regenerated rather
@@ -247,6 +299,7 @@ contains one, is therefore a correctness requirement.
 mond --configfile=~/.monvark/mond.conf \
      --appdata=~/.monvark/node \
      --miningaddr=<address> \
+     [--listen=:0]          only when the default P2P port is busy
      [--testnet | --simnet]
 ```
 
@@ -415,6 +468,8 @@ The logic lives in pure predicates so it is testable without a node or a GPU:
 - **`mond.conf` generation** — content, 0600 mode, and the tamper detection that
   rejects a file carrying `miningaddr` or `generate`.
 - **Binary lookup** — the error names the path searched.
+- **Port selection** — the P2P argument is absent when the default port is free
+  and `--listen=:0` when it is busy. Testable by holding the port in the test.
 - **Sync-gate predicate** — over a synthesized `GetBlockChainInfoResult`,
   including the `blocks == headers == 0` case that must *not* read as synced.
 - **Expiry decision** — the three-way classification of §3.6 as a pure function.
@@ -438,7 +493,7 @@ comparison, which this rig cannot make reliably.
 |---|---|---|
 | 1 | Move device construction ahead of everything; `NewMiner` takes devices | `-B` still runs; a machine with no driver fails in seconds |
 | 2 | `payout.go`: resolution, validation, persistence, permissions | unit tests; a real first run |
-| 3 | `node.go`: `mond.conf`, child start, shutdown | node starts and stops cleanly; `mond.conf` is 0600 |
+| 3 | `node.go`: `mond.conf`, port selection, child start, shutdown | node starts and stops cleanly; `mond.conf` is 0600; starts alongside a node already holding 9508 |
 | 4 | `node.go`: connect-retry and the sync gate | mining does not start before the gate passes |
 | 5 | Payee assertion in `workSubmitThread` | simnet: mine a block, assert the coinbase; then flip the address and assert it refuses |
 | 6 | Work expiry in `miner.go` | unit test on the decision; kill the websocket and watch it recover |
@@ -452,6 +507,21 @@ comparison, which this rig cannot make reliably.
 None blocking. Both of stage 1 spec §6's owner questions are now answered:
 Windows ships unsigned and documented (§2.3), and macOS is a development target
 (§3.10).
+
+**Considered and declined: an explicit `--rpcserver` opt-in** for attaching to a
+node the user names themselves. Everything wrong with auto-attachment (§2.7)
+comes from the *auto*: a user who supplies the server, the credentials and
+`--miningaddr` has asserted ownership, so the silent failure becomes their
+deliberate choice, and the post-hoc payee proof still stops mining on a
+mismatch. It is declined because the P2P fallback of §3.4 removes the blocker
+that motivated it, so building it now would be speculative, and because it
+restores four flags §3.8 deletes.
+
+Recorded rather than dropped because the cost of adding it later is known and
+small: an `if` around `nodeStart` in `main.go`, since `newSoloMiner` already
+reads `cfg.RPCServer`, `cfg.RPCCert`, `cfg.RPCUser` and `cfg.RPCPassword`, plus
+restoring those four flag tags and a startup warning that the payout is
+unverified until the first block. Nothing in this design forecloses it.
 
 ---
 
@@ -506,3 +576,20 @@ list is empty (`internal/rpcserver/rpcserver.go:4733`).
 the config struct and then re-parses the command line so flags win, which is why
 `--miningaddr` needs no new parsing and why conflict detection needs exactly one
 captured local.
+
+**7.10 The node's RPC server is off by default.** `config.go:1041-1046` sets
+`DisableRPC = true` when basic auth is in use and neither `rpcuser`/`rpcpass` nor
+`rpclimituser`/`rpclimitpass` is configured. A running node therefore very often
+has no RPC at all, which is what makes auto-detection unworkable rather than
+merely unwise.
+
+**7.11 A P2P bind failure is fatal when it is total.** `initListeners` logs
+`Can't listen on %s` and continues past an address it cannot bind
+(`server.go:4395-4402`), but the caller returns
+`errors.New("no valid listen address")` when none succeeded (`server.go:3871`).
+`DefaultPort` is `9508` (`chaincfg/mainnetparams.go:86`).
+
+**7.12 An explicit port survives normalisation.** `normalizeAddresses` splits
+each address with `net.SplitHostPort` and keeps the port it finds, substituting
+the default only when there is none — so `--listen=:0` reaches `net.Listen` as
+`:0`.
