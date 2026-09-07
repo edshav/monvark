@@ -11,28 +11,29 @@ import (
 
 	"github.com/monetarium/monetarium-node/chaincfg"
 	"github.com/monetarium/monetarium-node/txscript/stdaddr"
+	"golang.org/x/term"
 )
 
 // payoutAddress reports which payout address to use.  effective is the value
 // after the command line has overridden the config file; fromFile is the config
-// file's own value, captured before that override.  needPrompt is true when
-// neither source supplied one.
+// file's own value, captured before that override.  An empty result means
+// neither source supplied one and the user has to be asked.
 //
 // A command line address that disagrees with the file is an error naming the
 // file.  The file is never rewritten to match and never silently overwritten:
 // that is the install-versus-upgrade distinction, and getting it wrong is the
 // bug that ships when a user re-extracts the archive over an existing install.
-func payoutAddress(effective, fromFile, filePath string) (string, bool, error) {
+func payoutAddress(effective, fromFile, filePath string) (string, error) {
 	if effective == "" {
-		return "", true, nil
+		return "", nil
 	}
 	if fromFile != "" && effective != fromFile {
-		return "", false, fmt.Errorf("the payout address on the command "+
+		return "", fmt.Errorf("the payout address on the command "+
 			"line (%s) disagrees with the one in %s (%s); remove one of "+
 			"them, this file is never overwritten", effective, filePath,
 			fromFile)
 	}
-	return effective, false, nil
+	return effective, nil
 }
 
 // validatePayout reports whether addr is a valid address on params.  It is
@@ -104,29 +105,6 @@ func promptPayout() (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
-// isTerminal reports whether f is a terminal we can ask a question on.
-//
-// A character device is not enough on its own: /dev/null is one too, and it is
-// exactly what systemd's default StandardInput=null and a docker run without
-// -i hand a process -- the very case this check exists to catch.  A pipe or a
-// redirected file is already excluded by the character-device test.
-func isTerminal(f *os.File) bool {
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	if info.Mode()&os.ModeCharDevice == 0 {
-		return false
-	}
-	null, err := os.Stat(os.DevNull)
-	if err != nil {
-		// With nothing to compare against, fall back to the weaker test rather
-		// than refusing to prompt a user who does have a terminal.
-		return true
-	}
-	return !os.SameFile(info, null)
-}
-
 // resolvePayout returns the address block rewards are paid to, asking the user
 // for one on first run.  Precedence is the command line, then the config file,
 // then the prompt.
@@ -135,13 +113,13 @@ func resolvePayout(cfg *config) (string, error) {
 		return "", err
 	}
 
-	addr, needPrompt, err := payoutAddress(cfg.MiningAddr, cfg.fileMiningAddr,
+	addr, err := payoutAddress(cfg.MiningAddr, cfg.fileMiningAddr,
 		cfg.ConfigFile)
 	if err != nil {
 		return "", err
 	}
 
-	if !needPrompt {
+	if addr != "" {
 		if err := validatePayout(addr, chainParams); err != nil {
 			return "", err
 		}
@@ -149,9 +127,10 @@ func resolvePayout(cfg *config) (string, error) {
 		return addr, nil
 	}
 
-	// Only a terminal can answer a question.  Under systemd or Docker there is
-	// nobody to ask, so say what to do instead of blocking on a closed stdin.
-	if !isTerminal(os.Stdin) {
+	// Only a terminal can answer a question.  Under systemd (StandardInput=null
+	// by default) or a docker run without -i there is nobody to ask, so say
+	// what to do instead of blocking on a stdin that will never answer.
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return "", fmt.Errorf("no payout address configured and stdin is not "+
 			"a terminal; pass --miningaddr, or add miningaddr= to %s",
 			cfg.ConfigFile)

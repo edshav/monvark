@@ -17,7 +17,7 @@ var (
 	cfg *config
 )
 
-func monvarkMain() error {
+func monvarkMain() (err error) {
 	// Load configuration and parse command line.  This function also
 	// initializes logging and configures it accordingly.
 	tcfg, _, err := loadConfig()
@@ -70,6 +70,17 @@ func monvarkMain() error {
 		stop()
 	}()
 
+	// Everything below can fail merely because the user interrupted it, and an
+	// interrupt is a deliberate stop, not a fault: exiting non-zero would make
+	// it look like a crash to a service manager.  This does not mask a genuine
+	// fault found while mining -- m.Run cancels a context *derived* from this
+	// one, so ctx.Err() stays nil and its error still surfaces.
+	defer func() {
+		if ctx.Err() != nil {
+			err = nil
+		}
+	}()
+
 	// Build the devices first.  Everything after this point can take minutes,
 	// and a user whose driver is broken should not wait through it.  This is
 	// the full build rather than a cheap enumeration on purpose: getCLDevices
@@ -106,21 +117,12 @@ func monvarkMain() error {
 
 		node, err := nodeStart(ctx, cfg, payoutAddr)
 		if err != nil {
-			// A cancelled context here means the user interrupted the start,
-			// not that the node is broken.  Exiting non-zero would make a
-			// deliberate stop look like a fault to a service manager.
-			if ctx.Err() != nil {
-				return nil
-			}
 			mainLog.Criticalf("Unable to start the node: %v", err)
 			return err
 		}
 		defer node.Stop()
 
 		if err := node.WaitSynced(ctx); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
 			mainLog.Criticalf("%v", err)
 			return err
 		}
@@ -128,11 +130,6 @@ func monvarkMain() error {
 
 	m, err := NewMiner(ctx, devices, workDone, payoutAddr)
 	if err != nil {
-		// As with nodeStart and WaitSynced above, a cancelled context here
-		// means the user interrupted the run, not that the miner is broken.
-		if ctx.Err() != nil {
-			return nil
-		}
 		mainLog.Criticalf("Error initializing miner: %v", err)
 		return err
 	}

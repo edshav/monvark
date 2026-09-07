@@ -139,34 +139,22 @@ func TestSameTemplate(t *testing.T) {
 		current[i] = byte(i)
 	}
 
-	// The case that matters: getwork refreshes the timestamp on every call,
-	// so a poll of an otherwise-unchanged template must still compare equal.
-	t.Run("same template, different timestamp word", func(t *testing.T) {
-		data := current
-		binary.LittleEndian.PutUint32(data[128+4*work.TimestampWord:], 0xdeadbeef)
-		if !sameTemplate(data[:], current) {
-			t.Error("same template with a refreshed timestamp reported as a different one")
-		}
-	})
+	// The case that matters: getwork refreshes the timestamp on every call, so
+	// a poll of an otherwise-unchanged template must still compare equal -- it
+	// is what makes the quiet-chain branch reachable at all.
+	data := current
+	binary.LittleEndian.PutUint32(data[128+4*work.TimestampWord:], 0xdeadbeef)
+	if !sameTemplate(data[:], current) {
+		t.Error("same template with a refreshed timestamp reported as a different one")
+	}
 
-	t.Run("identical data", func(t *testing.T) {
-		data := current
-		if !sameTemplate(data[:], current) {
-			t.Error("identical data reported as a different template")
-		}
-	})
+	data[0] ^= 0xff
+	if sameTemplate(data[:], current) {
+		t.Error("a changed template reported as the same one")
+	}
 
-	t.Run("different template", func(t *testing.T) {
-		data := current
-		data[0] ^= 0xff
-		if sameTemplate(data[:], current) {
-			t.Error("a changed template reported as the same one")
-		}
-	})
-
-	t.Run("data shorter than the identity prefix", func(t *testing.T) {
-		if sameTemplate(current[:100], current) {
-			t.Error("short data reported as the same template")
-		}
-	})
+	// Short data must not panic on the prefix slice.
+	if sameTemplate(current[:100], current) {
+		t.Error("short data reported as the same template")
+	}
 }

@@ -77,7 +77,7 @@ type config struct {
 
 	// Mining options
 	MiningAddr string `long:"miningaddr" description:"Address that block rewards are paid to.  Asked for once on first run and saved to the config file"`
-	Mond       string `long:"mond" description:"Path to the mond binary, for installations where it does not sit beside monvark"`
+	Mond       string `long:"mond" description:"Path to the mond binary, for running a development build with no node beside it"`
 
 	// fileMiningAddr is MiningAddr as it appeared in the config file, captured
 	// before the command line is parsed a second time.  After that parse

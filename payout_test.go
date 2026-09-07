@@ -14,17 +14,16 @@ func TestPayoutAddress(t *testing.T) {
 	const file = "/home/u/.monvark/monvark.conf"
 
 	tests := []struct {
-		name       string
-		effective  string
-		fromFile   string
-		wantAddr   string
-		wantPrompt bool
-		wantErr    bool
+		name      string
+		effective string
+		fromFile  string
+		wantAddr  string
+		wantErr   bool
 	}{{
-		name:       "neither source supplies one",
-		effective:  "",
-		fromFile:   "",
-		wantPrompt: true,
+		// An empty result is what sends resolvePayout to the prompt.
+		name:      "neither source supplies one",
+		effective: "",
+		fromFile:  "",
 	}, {
 		name:      "flag only",
 		effective: "Vs1",
@@ -45,7 +44,7 @@ func TestPayoutAddress(t *testing.T) {
 	}}
 
 	for _, test := range tests {
-		addr, prompt, err := payoutAddress(test.effective, test.fromFile, file)
+		addr, err := payoutAddress(test.effective, test.fromFile, file)
 		if test.wantErr {
 			if err == nil {
 				t.Errorf("%s: want error, got none", test.name)
@@ -60,10 +59,6 @@ func TestPayoutAddress(t *testing.T) {
 		if err != nil {
 			t.Errorf("%s: unexpected error: %v", test.name, err)
 			continue
-		}
-		if prompt != test.wantPrompt {
-			t.Errorf("%s: prompt = %v, want %v", test.name, prompt,
-				test.wantPrompt)
 		}
 		if addr != test.wantAddr {
 			t.Errorf("%s: addr = %q, want %q", test.name, addr, test.wantAddr)
@@ -122,26 +117,6 @@ func TestCheckPerms(t *testing.T) {
 	// A file that does not exist yet is not an error: first run creates it.
 	if err := checkPerms(filepath.Join(dir, "absent.conf")); err != nil {
 		t.Fatalf("absent config rejected: %v", err)
-	}
-}
-
-// TestIsTerminalRejectsDevNull covers the exact case isTerminal exists for:
-// systemd's default StandardInput=null and a plain `docker run` (no -i) both
-// hand a process /dev/null as stdin, which is a character device but not a
-// terminal a prompt can be answered on.
-func TestIsTerminalRejectsDevNull(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("NUL does not stat the same way /dev/null does")
-	}
-
-	f, err := os.Open(os.DevNull)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-
-	if isTerminal(f) {
-		t.Fatal("/dev/null reported as a terminal")
 	}
 }
 

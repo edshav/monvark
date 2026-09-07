@@ -282,21 +282,14 @@ func workStale(received uint32, now time.Time, bound time.Duration) bool {
 	return now.Sub(time.Unix(int64(received), 0)) > bound
 }
 
-// templateIdentity is how much of Work.Data identifies the block template
-// rather than a particular attempt at it: data[0:128] is the midstate half --
-// version, previous block, both merkle roots and bits -- and stops before the
-// height, size, timestamp and nonces (see "Work data layout" in CLAUDE.md).
-const templateIdentity = 128
-
 // sameTemplate reports whether data describes the same block template as
-// current.  getwork refreshes the timestamp on every call (the node's
-// handleGetWorkRequest calls UpdateBlockTime before serializing), so
-// comparing the full 192 bytes would never match even when the template
-// itself is unchanged; comparing only the identifying prefix is what makes
-// the quiet-chain classification reachable at all.
+// current.  Only data[0:128] identifies the template -- version, previous
+// block, both merkle roots and bits (see "Work data layout" in CLAUDE.md) --
+// and getwork refreshes the timestamp in the tail on every call (the node's
+// handleGetWorkRequest calls UpdateBlockTime before serializing), so comparing
+// all 192 bytes would never match even when the template itself is unchanged.
 func sameTemplate(data []byte, current [192]byte) bool {
-	return len(data) >= templateIdentity &&
-		bytes.Equal(data[:templateIdentity], current[:templateIdentity])
+	return len(data) >= 128 && bytes.Equal(data[:128], current[:128])
 }
 
 // expiryThread re-issues GetWork when no pushed work has arrived within the

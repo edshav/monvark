@@ -39,13 +39,13 @@ func (n *nodeProc) hasExited() bool {
 	}
 }
 
-// freeAddr binds port 0 on host, returns the host:port the OS assigned, and
-// releases it.  There is a small window between the release and the node's own
-// bind in which another process could take it; it is local, brief, and the
-// standard way to do this.  The node failing to bind is a clear startup error,
-// not a silent misbehaviour.
-func freeAddr(host string) (string, error) {
-	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+// freeAddr binds an ephemeral loopback port, returns the host:port the OS
+// assigned, and releases it.  There is a small window between the release and
+// the node's own bind in which another process could take it; it is local,
+// brief, and the standard way to do this.  The node failing to bind is a clear
+// startup error, not a silent misbehaviour.
+func freeAddr() (string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", err
 	}
@@ -147,8 +147,9 @@ func mondArgs(cfg *config, confPath, appData, addr string, p2pBusy bool) []strin
 	return args
 }
 
-// mondPath resolves the node binary.  It sits beside monvark in the archive;
-// override covers installations where it does not.
+// mondPath resolves the node binary.  It sits beside monvark in the archive,
+// which is the only layout the release produces; override is the development
+// path, where monvark is a `go build` output with no node next to it.
 func mondPath(exeDir, override string) (string, error) {
 	if override != "" {
 		if _, err := os.Stat(override); err != nil {
@@ -187,7 +188,7 @@ func nodeStart(ctx context.Context, cfg *config, addr string) (*nodeProc, error)
 		return nil, err
 	}
 
-	rpcListen, err := freeAddr("127.0.0.1")
+	rpcListen, err := freeAddr()
 	if err != nil {
 		return nil, err
 	}
