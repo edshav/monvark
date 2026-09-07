@@ -34,8 +34,11 @@ jobs:
         run: |
           set -eu
           mkdir -p dist/linux dist/windows
-          GOOS=linux   GOARCH=amd64 go build -trimpath -o dist/linux/monvark .
-          GOOS=windows GOARCH=amd64 go build -trimpath -o dist/windows/monvark.exe .
+          # version.go keeps a -pre version on main; the release build stamps
+          # the real one from the tag, or the binary reports itself pre-release.
+          LD="-X main.Version=${GITHUB_REF_NAME#v}+${GITHUB_SHA::9}"
+          GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "$LD" -o dist/linux/monvark .
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LD" -o dist/windows/monvark.exe .
 
       - name: Fetch and verify the node
         env:
