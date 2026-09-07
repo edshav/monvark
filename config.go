@@ -85,9 +85,16 @@ type config struct {
 // normalizeAddress returns addr with the passed default port appended if
 // there is not already a port specified.
 func normalizeAddress(addr string, defaultPort string) string {
-	_, _, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return net.JoinHostPort(addr, defaultPort)
+	}
+	if port == "" {
+		// SplitHostPort succeeds on a bare trailing colon -- ":" or
+		// "localhost:" -- and reports an empty port, which the net
+		// package reads as "pick an ephemeral one" rather than as the
+		// default.
+		return net.JoinHostPort(host, defaultPort)
 	}
 	return addr
 }
