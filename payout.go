@@ -51,11 +51,13 @@ func validatePayout(addr string, params *chaincfg.Params) error {
 	return nil
 }
 
-// checkPerms fails when path is group- or world-writable.  Both files monvark
-// writes go through it: every field in monvark.conf parses back into the config
-// struct including the payout address, and mond.conf carries the node's
-// credentials -- so write access to either is write access to the payout.  A
-// file that does not exist yet is not an error: first run creates it.
+// checkPerms fails when path is readable or writable by anyone but its owner.
+// Both files monvark writes go through it: every field in monvark.conf parses
+// back into the config struct including the payout address, and mond.conf
+// carries the node's credentials -- so access to either is access to the
+// payout.  The mask is 0077 rather than 0022 deliberately: merely reading
+// mond.conf is enough to drive the node's RPC.  A file that does not exist yet
+// is not an error: first run creates it.
 //
 // Windows is skipped because Go synthesizes the unix mode bits there, so the
 // check would reject files that are in fact fine.
@@ -71,21 +73,40 @@ func checkPerms(path string) error {
 		return nil
 	}
 	if perm := info.Mode().Perm(); perm&0077 != 0 {
-		return fmt.Errorf("%s is writable by others (mode %04o); "+
+		return fmt.Errorf("%s is accessible to other users (mode %04o); "+
 			"run: chmod 600 %s", path, perm, path)
 	}
 	return nil
 }
 
 // appendMiningAddr appends the payout address to path, creating it 0600 if it
-// does not exist and preserving whatever is already there.
+// does not exist and preserving whatever is already there.  A file whose last
+// line has no terminating newline gets one first: monvark's own writes always
+// end in one, but this file is meant to be hand-edited, and without the check
+// the address would be glued onto the end of whatever key came last.
 func appendMiningAddr(path, addr string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	_, err = fmt.Fprintf(f, "miningaddr=%s\n", addr)
+
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	prefix := ""
+	if size := info.Size(); size > 0 {
+		var last [1]byte
+		if _, err := f.ReadAt(last[:], size-1); err != nil {
+			return err
+		}
+		if last[0] != '\n' {
+			prefix = "\n"
+		}
+	}
+
+	_, err = fmt.Fprintf(f, "%sminingaddr=%s\n", prefix, addr)
 	return err
 }
 

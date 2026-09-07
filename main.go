@@ -17,6 +17,16 @@ var (
 	cfg *config
 )
 
+// critical logs a startup failure, unless the run is merely being interrupted.
+// Ctrl+C during any of the minutes-long steps below makes the step it landed in
+// fail, and that failure is not a fault worth a critical line -- the same
+// reasoning that keeps the exit code at zero for it.
+func critical(ctx context.Context, format string, args ...interface{}) {
+	if ctx.Err() == nil {
+		mainLog.Criticalf(format, args...)
+	}
+}
+
 func monvarkMain() (err error) {
 	// Load configuration and parse command line.  This function also
 	// initializes logging and configures it accordingly.
@@ -90,11 +100,11 @@ func monvarkMain() (err error) {
 	workDone := make(chan []byte, 10)
 	devices, err := newMinerDevs(workDone)
 	if err != nil {
-		mainLog.Criticalf("Error initializing devices: %v", err)
+		critical(ctx, "Error initializing devices: %v", err)
 		return err
 	}
 	if len(devices) == 0 {
-		mainLog.Critical("No devices started")
+		critical(ctx, "No devices started")
 		return errors.New("no devices started")
 	}
 
@@ -108,29 +118,30 @@ func monvarkMain() (err error) {
 	// Benchmark mode needs no node, no address and no chain: it is the only
 	// path that exercises the mining loop on its own.
 	var payoutAddr string
+	var node *nodeProc
 	if !cfg.Benchmark {
 		payoutAddr, err = resolvePayout(cfg)
 		if err != nil {
-			mainLog.Criticalf("%v", err)
+			critical(ctx, "%v", err)
 			return err
 		}
 
-		node, err := nodeStart(ctx, cfg, payoutAddr)
+		node, err = nodeStart(ctx, cfg, payoutAddr)
 		if err != nil {
-			mainLog.Criticalf("Unable to start the node: %v", err)
+			critical(ctx, "Unable to start the node: %v", err)
 			return err
 		}
 		defer node.Stop()
 
 		if err := node.WaitSynced(ctx); err != nil {
-			mainLog.Criticalf("%v", err)
+			critical(ctx, "%v", err)
 			return err
 		}
 	}
 
-	m, err := NewMiner(ctx, devices, workDone, payoutAddr)
+	m, err := NewMiner(ctx, devices, workDone, payoutAddr, node)
 	if err != nil {
-		mainLog.Criticalf("Error initializing miner: %v", err)
+		critical(ctx, "Error initializing miner: %v", err)
 		return err
 	}
 	if cfg.APIListen != "" {

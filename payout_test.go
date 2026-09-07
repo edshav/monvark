@@ -159,4 +159,20 @@ func TestAppendMiningAddr(t *testing.T) {
 	if !strings.Contains(string(got), "miningaddr=Vs2") {
 		t.Fatalf("address not appended: %q", got)
 	}
+
+	// A hand-edited file need not end in a newline; the address must still
+	// land on a line of its own rather than being glued to the last key.
+	if err := os.WriteFile(path, []byte("debuglevel=debug"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendMiningAddr(path, "Vs3"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "debuglevel=debug\nminingaddr=Vs3\n"; string(got) != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
 }

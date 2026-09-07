@@ -318,6 +318,10 @@ func (n *nodeProc) connect(ctx context.Context, cfg *config) (*rpcclient.Client,
 // stop RPC rather than a signal: os.Interrupt cannot be delivered through
 // Process.Signal on Windows, and the Kill that would remain there risks the
 // node's database.  This is one code path on every platform.
+//
+// Stop is best-effort by design and never kills the node: the wait below bounds
+// how long monvark itself lingers, not how long the node is given to shut down
+// safely.
 func (n *nodeProc) Stop() {
 	wait := 30 * time.Second
 	switch {
@@ -351,9 +355,14 @@ func (n *nodeProc) Stop() {
 	case <-n.exited:
 		mainLog.Info("The node shut down.")
 	case <-time.After(wait):
-		mainLog.Warn("The node did not shut down in time; killing it.")
-		n.cmd.Process.Kill()
-		<-n.exited
+		// The node is never killed here.  A node that is still running after
+		// being asked to stop is one that is flushing its database, and
+		// killing it there is exactly how that database gets corrupted --
+		// which is the whole reason this function talks to it over RPC in the
+		// first place.  Leaving it costs nothing: it finishes on its own, and
+		// the next run picks its own free RPC port regardless.
+		mainLog.Warnf("The node has not finished shutting down after %v; "+
+			"leaving it to finish on its own.", wait)
 	}
 }
 

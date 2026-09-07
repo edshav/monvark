@@ -42,6 +42,10 @@ type Miner struct {
 
 	rpc *rpcclient.Client
 
+	// node is the node monvark started, watched for the duration of the run.
+	// It is nil in benchmark mode, which has no node.
+	node *nodeProc
+
 	// payoutAddr is the address block rewards are paid to, and payoutScript
 	// its payment script.  The assertion below compares the coinbase against
 	// the script; the address is what the user sees.
@@ -138,7 +142,7 @@ func newSoloMiner(ctx context.Context, devices []*Device) (*Miner, error) {
 	return m, nil
 }
 
-func NewMiner(ctx context.Context, devices []*Device, workDone chan []byte, payoutAddr string) (*Miner, error) {
+func NewMiner(ctx context.Context, devices []*Device, workDone chan []byte, payoutAddr string, node *nodeProc) (*Miner, error) {
 	var m *Miner
 	var err error
 	if cfg.Benchmark {
@@ -161,6 +165,7 @@ func NewMiner(ctx context.Context, devices []*Device, workDone chan []byte, payo
 	}
 
 	m.workDone = workDone
+	m.node = node
 	m.started = uint32(time.Now().Unix())
 
 	// Return early on benchmark mode to avoid requiring a dcrd instance to
@@ -374,6 +379,26 @@ func (m *Miner) expiryThread(ctx context.Context) {
 	}
 }
 
+// nodeWatchThread ends the run when the node monvark started goes away.
+//
+// Without it a dead node is only noticed through the work-expiry path, which
+// cannot fire before workExpiry has elapsed and then needs several failed polls
+// on top -- the better part of twenty minutes spent hashing a template no
+// longer attached to a chain.  The exited channel already says so immediately;
+// this is only the wiring.
+func (m *Miner) nodeWatchThread(ctx context.Context) {
+	defer m.wg.Done()
+
+	select {
+	case <-ctx.Done():
+	case <-m.node.exited:
+		minrLog.Criticalf("The node exited (%v); shutting down.",
+			m.node.cmd.ProcessState)
+		atomic.StoreUint32(&m.fatal, 1)
+		m.cancel()
+	}
+}
+
 func (m *Miner) printStatsThread(ctx context.Context) {
 	defer m.wg.Done()
 
@@ -421,6 +446,11 @@ func (m *Miner) Run(ctx context.Context) error {
 	if !cfg.Benchmark {
 		m.wg.Add(1)
 		go m.expiryThread(ctx)
+	}
+
+	if m.node != nil {
+		m.wg.Add(1)
+		go m.nodeWatchThread(ctx)
 	}
 
 	if cfg.Benchmark {
