@@ -303,6 +303,12 @@ func (m *Miner) Run(ctx context.Context) {
 // matching would not.  A coinbase carries the treasury and other outputs
 // alongside the miner's, so ours being one of several is the normal case.
 func coinbasePays(blk *chainjson.GetBlockVerboseResult, wantScript string) bool {
+	// An empty want-script must never match.  ScriptPubKey.Hex is omitempty,
+	// so it can decode as "", and EqualFold("", "") is true -- this function
+	// decides whether the user was paid and must fail closed, not open.
+	if wantScript == "" {
+		return false
+	}
 	if len(blk.RawTx) == 0 {
 		return false
 	}
