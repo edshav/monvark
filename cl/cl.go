@@ -59,6 +59,9 @@ const (
 	Success        int32 = 0
 	DeviceNotFound int32 = -1
 	InvalidValue   int32 = -30
+	// PlatformNotFound is CL_PLATFORM_NOT_FOUND_KHR, which the ocl-icd loader
+	// returns when it is installed but no vendor ICD is.
+	PlatformNotFound int32 = -1001
 )
 
 // Device types, as returned by CL_DEVICE_TYPE and accepted by clGetDeviceIDs.
@@ -149,7 +152,8 @@ var errorNames = map[int32]string{
 	-54: "CL_INVALID_WORK_GROUP_SIZE", -55: "CL_INVALID_WORK_ITEM_SIZE",
 	-56: "CL_INVALID_GLOBAL_OFFSET", -58: "CL_INVALID_EVENT",
 	-59: "CL_INVALID_OPERATION", -61: "CL_INVALID_BUFFER_SIZE",
-	-63: "CL_INVALID_GLOBAL_WORK_SIZE",
+	-63:   "CL_INVALID_GLOBAL_WORK_SIZE",
+	-1001: "CL_PLATFORM_NOT_FOUND_KHR",
 }
 
 // ErrorName returns the symbolic name of an OpenCL status, or the number when

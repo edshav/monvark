@@ -69,16 +69,14 @@ type config struct {
 	RPCPassword string `short:"P" long:"rpcpass" default-mask:"-" description:"RPC password"`
 	RPCServer   string `short:"s" long:"rpcserver" description:"RPC server to connect to"`
 	RPCCert     string `short:"c" long:"rpccert" description:"RPC server certificate chain for validation"`
-	NoTLS       bool   `long:"notls" description:"Disable TLS"`
 	Proxy       string `long:"proxy" description:"Connect via SOCKS5 proxy (eg. 127.0.0.1:9050)"`
 	ProxyUser   string `long:"proxyuser" description:"Username for proxy server"`
 	ProxyPass   string `long:"proxypass" default-mask:"-" description:"Password for proxy server"`
 
 	Benchmark bool `short:"B" long:"benchmark" description:"Run in benchmark mode."`
 
-	TestNet       bool `long:"testnet" description:"Connect to testnet"`
-	SimNet        bool `long:"simnet" description:"Connect to the simulation test network"`
-	TLSSkipVerify bool `long:"skipverify" description:"Do not verify tls certificates (not recommended!)"`
+	TestNet bool `long:"testnet" description:"Connect to testnet"`
+	SimNet  bool `long:"simnet" description:"Connect to the simulation test network"`
 
 	Autocalibrate     string `short:"A" long:"autocalibrate" description:"Time target in milliseconds to spend executing hashes on the device during each iteration. Single global value or a comma separated list."`
 	AutocalibrateInts []int

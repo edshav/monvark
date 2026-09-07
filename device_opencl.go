@@ -123,9 +123,18 @@ type Device struct {
 	hashMismatches uint64
 }
 
+// getCLPlatforms returns the OpenCL platforms present, which is none at all on
+// a machine whose ICD loader is installed but has no vendor ICD behind it --
+// common on Linux, where ocl-icd-libopencl1 arrives as a dependency of
+// unrelated packages.  That case is an empty result rather than an error, so
+// the caller ends at "no devices started" instead of an opaque OpenCL status.
 func getCLPlatforms() ([]cl.PlatformID, error) {
 	var numPlatforms uint32
-	if status := cl.GetPlatformIDs(0, nil, &numPlatforms); status != cl.Success {
+	status := cl.GetPlatformIDs(0, nil, &numPlatforms)
+	if status == cl.PlatformNotFound || (status == cl.Success && numPlatforms == 0) {
+		return nil, nil
+	}
+	if status != cl.Success {
 		return nil, clError(status, "clGetPlatformIDs")
 	}
 
@@ -383,7 +392,11 @@ func (d *Device) runDevice(ctx context.Context) error {
 			return clError(status, "clEnqueueReadBuffer")
 		}
 
-		for i := uint32(0); i < outputData[0]; i++ {
+		// The kernel increments its candidate counter without bounding it
+		// against the buffer, and the kernel is frozen, so clamp the count
+		// here rather than let a garbage value index out of range.
+		count := min(outputData[0], uint32(outputBufferSize)-1)
+		for i := uint32(0); i < count; i++ {
 			minrLog.Debugf("DEV #%d: Found candidate %v nonce %08x, "+
 				"extraNonce %08x, extraNonce2 %08x, timestamp %08x",
 				d.index, i+1, outputData[i+1], d.lastBlock[work.Nonce1Word],

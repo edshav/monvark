@@ -176,7 +176,7 @@ func (m *Miner) workSubmitThread(ctx context.Context) {
 			accepted, err := m.rpc.GetWorkSubmit(ctx, hex.EncodeToString(data))
 			if err != nil {
 				atomic.AddUint64(&m.invalidShares, 1)
-				minrLog.Errorf("failed to submit work: %w", err)
+				minrLog.Errorf("failed to submit work: %v", err)
 				continue
 			} else if !accepted {
 				atomic.AddUint64(&m.invalidShares, 1)
