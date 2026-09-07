@@ -5,9 +5,7 @@ package main
 import (
 	"math"
 	"time"
-	"unsafe"
 
-	"github.com/edshav/monvark/cl"
 	"github.com/edshav/monvark/work"
 )
 
@@ -20,64 +18,15 @@ func (d *Device) getKernelExecutionTime(globalWorksize uint32) (time.Duration,
 		d.index, d.deviceName)
 	outputData := make([]uint32, outputBufferSize)
 
-	var status int32
-
-	// arg 0: pointer to the buffer
-	obuf := d.outputBuffer
-	status = cl.SetKernelArg(d.kernel, 0, uint64(unsafe.Sizeof(obuf)),
-		unsafe.Pointer(&obuf))
-	if status != cl.Success {
-		return time.Duration(0), clError(status, "clSetKernelArg")
+	if err := d.setKernelArgs(); err != nil {
+		return 0, err
 	}
 
-	// args 1..8: midstate
-	for i := 0; i < 8; i++ {
-		ms := d.midstate[i]
-		status = cl.SetKernelArg(d.kernel, uint32(i+1), uint32Size,
-			unsafe.Pointer(&ms))
-		if status != cl.Success {
-			return time.Duration(0), clError(status, "clSetKernelArg")
-		}
+	elapsedTime, err := d.runKernel(globalWorksize, outputData)
+	if err != nil {
+		return 0, err
 	}
 
-	// args 9..20: lastBlock except nonce
-	i2 := 0
-	for i := 0; i < 12; i++ {
-		if i2 == work.Nonce0Word {
-			i2++
-		}
-		lb := d.lastBlock[i2]
-		status = cl.SetKernelArg(d.kernel, uint32(i+9), uint32Size,
-			unsafe.Pointer(&lb))
-		if status != cl.Success {
-			return time.Duration(0), clError(status, "clSetKernelArg")
-		}
-		i2++
-	}
-
-	// Clear the found count from the buffer
-	status = cl.EnqueueWriteBuffer(d.queue, d.outputBuffer, false, 0, uint32Size,
-		unsafe.Pointer(&zeroSlice[0]))
-	if status != cl.Success {
-		return time.Duration(0), clError(status, "clEnqueueWriteBuffer")
-	}
-
-	// Execute the kernel and follow its execution time.
-	currentTime := time.Now()
-	status = cl.EnqueueNDRangeKernel(d.queue, d.kernel, uint64(globalWorksize),
-		localWorksize)
-	if status != cl.Success {
-		return time.Duration(0), clError(status, "clEnqueueNDRangeKernel")
-	}
-
-	// Read the output buffer.
-	status = cl.EnqueueReadBuffer(d.queue, d.outputBuffer, true, 0,
-		uint32Size*outputBufferSize, unsafe.Pointer(&outputData[0]))
-	if status != cl.Success {
-		return time.Duration(0), clError(status, "clEnqueueReadBuffer")
-	}
-
-	elapsedTime := time.Since(currentTime)
 	minrLog.Tracef("DEV #%d: Kernel execution to read time for work "+
 		"size calibration: %v", d.index, elapsedTime)
 

@@ -17,24 +17,10 @@ const (
 	Nonce3Word    = 6
 )
 
-// NewWork is the constructor for Work.
-func NewWork(data [192]byte, target *big.Int, jobTime uint32, timeReceived uint32,
-	isGetWork bool) *Work {
-	return &Work{
-		Data:         data,
-		Target:       target,
-		JobTime:      jobTime,
-		TimeReceived: timeReceived,
-		IsGetWork:    isGetWork,
-	}
-}
-
-// Work holds the data returned from getwork and if needed some stratum related
-// values.
+// Work holds the data returned from getwork.
 type Work struct {
 	Data         [192]byte
 	Target       *big.Int
 	JobTime      uint32
 	TimeReceived uint32
-	IsGetWork    bool
 }

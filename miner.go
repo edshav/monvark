@@ -47,10 +47,13 @@ func onSoloWork(ctx context.Context, data, target []byte, reason string, devices
 	var workData [192]byte
 	copy(workData[:], data)
 
-	const isGetWork = true
 	timestamp := binary.LittleEndian.Uint32(workData[128+4*work.TimestampWord:])
-	w := work.NewWork(workData, bigTarget, timestamp, uint32(time.Now().Unix()),
-		isGetWork)
+	w := &work.Work{
+		Data:         workData,
+		Target:       bigTarget,
+		JobTime:      timestamp,
+		TimeReceived: uint32(time.Now().Unix()),
+	}
 
 	for _, d := range devices {
 		d.SetWork(ctx, w)
@@ -109,10 +112,6 @@ func newSoloMiner(ctx context.Context, devices []*Device) (*Miner, error) {
 	return m, nil
 }
 
-func newBenchmarkMiner(devices []*Device) *Miner {
-	return &Miner{devices: devices}
-}
-
 func NewMiner(ctx context.Context) (*Miner, error) {
 	workDone := make(chan []byte, 10)
 
@@ -126,7 +125,7 @@ func NewMiner(ctx context.Context) (*Miner, error) {
 
 	var m *Miner
 	if cfg.Benchmark {
-		m = newBenchmarkMiner(devices)
+		m = &Miner{devices: devices}
 	} else {
 		m, err = newSoloMiner(ctx, devices)
 	}

@@ -6,7 +6,6 @@ require (
 	github.com/decred/slog v1.2.0
 	github.com/ebitengine/purego v0.10.2
 	github.com/jessevdk/go-flags v1.5.0
-	github.com/jrick/logrotate v1.0.0
 	github.com/monetarium/monetarium-node/blockchain/standalone v1.3.9
 	github.com/monetarium/monetarium-node/chaincfg v1.3.9
 	github.com/monetarium/monetarium-node/chaincfg/chainhash v1.3.9

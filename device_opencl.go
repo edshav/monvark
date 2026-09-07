@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"sync"
 	"time"
 	"unsafe"
@@ -24,10 +25,8 @@ import (
 //go:embed blake3.cl
 var kernelSource string
 
-// Return the GPU library in use.
-func gpuLib() string {
-	return "OpenCL"
-}
+// gpuLib is the GPU library in use, reported at startup and by --version.
+const gpuLib = "OpenCL"
 
 const (
 	outputBufferSize = uint64(64)
@@ -50,32 +49,13 @@ func deviceName(id cl.DeviceID) string {
 	return name
 }
 
-// deviceTypeString renders a device's CL_DEVICE_TYPE as "CPU", "GPU" or both.
-func deviceTypeString(id cl.DeviceID) string {
-	value, status := cl.DeviceInfoUint64(id, cl.DeviceTypeParam)
-	if status != cl.Success {
-		return fmt.Sprintf("<unknown: %v>", clError(status, "clGetDeviceInfo"))
-	}
-
-	var s string
-	if value&uint64(cl.DeviceTypeCPU) != 0 {
-		s += DeviceTypeCPU
-	}
-	if value&uint64(cl.DeviceTypeGPU) != 0 {
-		s += DeviceTypeGPU
-	}
-	return s
-}
-
 type Device struct {
 	sync.Mutex
 	index int
 
 	// Items for OpenCL device
-	platformID   cl.PlatformID
 	deviceID     cl.DeviceID
 	deviceName   string
-	deviceType   string
 	context      cl.Context
 	queue        cl.Queue
 	outputBuffer cl.Mem
@@ -115,8 +95,6 @@ type Device struct {
 
 	started          uint32
 	allDiffOneShares uint64
-	validShares      uint64
-	invalidShares    uint64
 
 	// hashMismatches counts candidates whose host-recomputed hash did not end
 	// in a zero word, which means the host and the GPU disagree.
@@ -188,14 +166,12 @@ func ListDevices() {
 	}
 }
 
-func NewDevice(index int, order int, platformID cl.PlatformID, deviceID cl.DeviceID,
+func NewDevice(index int, order int, deviceID cl.DeviceID,
 	workDone chan []byte) (*Device, error) {
 	d := &Device{
 		index:      index,
-		platformID: platformID,
 		deviceID:   deviceID,
 		deviceName: deviceName(deviceID),
-		deviceType: deviceTypeString(deviceID),
 		newWork:    make(chan *work.Work, 5),
 		workDone:   workDone,
 	}
@@ -251,16 +227,13 @@ func NewDevice(index int, order int, platformID cl.PlatformID, deviceID cl.Devic
 	// The intensity or worksize must be set by the user.
 	userSetWorkSize := len(cfg.IntensityInts) > 0 || len(cfg.WorkSizeInts) > 0
 
+	// In each of the three settings below the first value applies to every
+	// device, and a value at this device's own position overrides it.
 	var globalWorkSize uint32
 	if !userSetWorkSize {
-		// Apply the first setting as a global setting
 		calibrateTime := cfg.AutocalibrateInts[0]
-
-		// Override with the per-device setting if it exists
-		for i := range cfg.AutocalibrateInts {
-			if i == order {
-				calibrateTime = cfg.AutocalibrateInts[i]
-			}
+		if order < len(cfg.AutocalibrateInts) {
+			calibrateTime = cfg.AutocalibrateInts[order]
 		}
 
 		idealWorkSize, err := d.calcWorkSizeForMilliseconds(calibrateTime)
@@ -275,27 +248,17 @@ func NewDevice(index int, order int, platformID cl.PlatformID, deviceID cl.Devic
 		globalWorkSize = idealWorkSize
 	} else {
 		if len(cfg.IntensityInts) > 0 {
-			// Apply the first setting as a global setting
-			globalWorkSize = 1 << uint32(cfg.IntensityInts[0])
-
-			// Override with the per-device setting if it exists
-			for i := range cfg.IntensityInts {
-				if i == order {
-					globalWorkSize = 1 << uint32(cfg.IntensityInts[order])
-				}
+			intensity := cfg.IntensityInts[0]
+			if order < len(cfg.IntensityInts) {
+				intensity = cfg.IntensityInts[order]
 			}
+			globalWorkSize = 1 << uint32(intensity)
 		}
 		if len(cfg.WorkSizeInts) > 0 {
-			// Apply the first setting as a global setting
 			globalWorkSize = cfg.WorkSizeInts[0]
-
-			// Override with the per-device setting if it exists
-			for i := range cfg.WorkSizeInts {
-				if i == order {
-					globalWorkSize = cfg.WorkSizeInts[order]
-				}
+			if order < len(cfg.WorkSizeInts) {
+				globalWorkSize = cfg.WorkSizeInts[order]
 			}
-
 		}
 	}
 	intensity := math.Log2(float64(globalWorkSize))
@@ -317,7 +280,6 @@ func (d *Device) runDevice(ctx context.Context) error {
 		return err
 	}
 
-	var status int32
 	ctxDoneCh := ctx.Done()
 	for {
 		d.updateCurrentWork(ctx)
@@ -337,59 +299,13 @@ func (d *Device) runDevice(ctx context.Context) error {
 		ts := d.work.JobTime + diffSeconds
 		d.lastBlock[work.TimestampWord] = ts
 
-		// arg 0: pointer to the buffer
-		obuf := d.outputBuffer
-		status = cl.SetKernelArg(d.kernel, 0, uint64(unsafe.Sizeof(obuf)),
-			unsafe.Pointer(&obuf))
-		if status != cl.Success {
-			return clError(status, "clSetKernelArg")
+		if err := d.setKernelArgs(); err != nil {
+			return err
 		}
 
-		// args 1..8: midstate
-		for i := 0; i < 8; i++ {
-			ms := d.midstate[i]
-			status = cl.SetKernelArg(d.kernel, uint32(i+1), uint32Size,
-				unsafe.Pointer(&ms))
-			if status != cl.Success {
-				return clError(status, "clSetKernelArg")
-			}
-		}
-
-		// args 9..20: lastBlock except nonce
-		i2 := 0
-		for i := 0; i < 12; i++ {
-			if i2 == work.Nonce0Word {
-				i2++
-			}
-			lb := d.lastBlock[i2]
-			status = cl.SetKernelArg(d.kernel, uint32(i+9), uint32Size,
-				unsafe.Pointer(&lb))
-			if status != cl.Success {
-				return clError(status, "clSetKernelArg")
-			}
-			i2++
-		}
-
-		// Clear the found count from the buffer
-		status = cl.EnqueueWriteBuffer(d.queue, d.outputBuffer, false, 0,
-			uint32Size, unsafe.Pointer(&zeroSlice[0]))
-		if status != cl.Success {
-			return clError(status, "clEnqueueWriteBuffer")
-		}
-
-		// Execute the kernel and follow its execution time.
-		currentTime := time.Now()
-		status = cl.EnqueueNDRangeKernel(d.queue, d.kernel, uint64(d.workSize),
-			localWorksize)
-		if status != cl.Success {
-			return clError(status, "clEnqueueNDRangeKernel")
-		}
-
-		// Read the output buffer.
-		status = cl.EnqueueReadBuffer(d.queue, d.outputBuffer, true, 0,
-			uint32Size*outputBufferSize, unsafe.Pointer(&outputData[0]))
-		if status != cl.Success {
-			return clError(status, "clEnqueueReadBuffer")
+		elapsedTime, err := d.runKernel(d.workSize, outputData)
+		if err != nil {
+			return err
 		}
 
 		// The kernel increments its candidate counter without bounding it
@@ -409,10 +325,79 @@ func (d *Device) runDevice(ctx context.Context) error {
 				d.lastBlock[work.Nonce1Word], d.lastBlock[work.Nonce2Word])
 		}
 
-		elapsedTime := time.Since(currentTime)
 		minrLog.Tracef("DEV #%d: Kernel execution to read time: %v", d.index,
 			elapsedTime)
 	}
+}
+
+// setKernelArgs sets every argument of the mining kernel from the device's
+// current midstate and last block.  The work size calibration launches the same
+// kernel with the same arguments.
+func (d *Device) setKernelArgs() error {
+	// arg 0: pointer to the buffer
+	obuf := d.outputBuffer
+	status := cl.SetKernelArg(d.kernel, 0, uint64(unsafe.Sizeof(obuf)),
+		unsafe.Pointer(&obuf))
+	if status != cl.Success {
+		return clError(status, "clSetKernelArg")
+	}
+
+	// args 1..8: midstate
+	for i := 0; i < 8; i++ {
+		ms := d.midstate[i]
+		status = cl.SetKernelArg(d.kernel, uint32(i+1), uint32Size,
+			unsafe.Pointer(&ms))
+		if status != cl.Success {
+			return clError(status, "clSetKernelArg")
+		}
+	}
+
+	// args 9..20: lastBlock except nonce
+	i2 := 0
+	for i := 0; i < 12; i++ {
+		if i2 == work.Nonce0Word {
+			i2++
+		}
+		lb := d.lastBlock[i2]
+		status = cl.SetKernelArg(d.kernel, uint32(i+9), uint32Size,
+			unsafe.Pointer(&lb))
+		if status != cl.Success {
+			return clError(status, "clSetKernelArg")
+		}
+		i2++
+	}
+
+	return nil
+}
+
+// runKernel clears the candidate count, launches one kernel over
+// globalWorkSize work items and reads the output buffer back into out.  It
+// returns how long the launch and the blocking read took.
+func (d *Device) runKernel(globalWorkSize uint32, out []uint32) (time.Duration,
+	error) {
+	// Clear the found count from the buffer
+	status := cl.EnqueueWriteBuffer(d.queue, d.outputBuffer, false, 0,
+		uint32Size, unsafe.Pointer(&zeroSlice[0]))
+	if status != cl.Success {
+		return 0, clError(status, "clEnqueueWriteBuffer")
+	}
+
+	// Execute the kernel and follow its execution time.
+	currentTime := time.Now()
+	status = cl.EnqueueNDRangeKernel(d.queue, d.kernel, uint64(globalWorkSize),
+		localWorksize)
+	if status != cl.Success {
+		return 0, clError(status, "clEnqueueNDRangeKernel")
+	}
+
+	// Read the output buffer.
+	status = cl.EnqueueReadBuffer(d.queue, d.outputBuffer, true, 0,
+		uint32Size*outputBufferSize, unsafe.Pointer(&out[0]))
+	if status != cl.Success {
+		return 0, clError(status, "clEnqueueReadBuffer")
+	}
+
+	return time.Since(currentTime), nil
 }
 
 func newMinerDevs(workDone chan []byte) ([]*Device, error) {
@@ -433,20 +418,9 @@ func newMinerDevs(workDone chan []byte) ([]*Device, error) {
 		}
 
 		for _, CLdeviceID := range CLdeviceIDs {
-			miningAllowed := false
-
 			// Enforce device restrictions if they exist
-			if len(cfg.DeviceIDs) > 0 {
-				for _, i := range cfg.DeviceIDs {
-					if deviceListIndex == i {
-						miningAllowed = true
-					}
-				}
-			} else {
-				miningAllowed = true
-			}
-			if miningAllowed {
-				newDevice, err := NewDevice(deviceListIndex, deviceListEnabledCount, platformID, CLdeviceID, workDone)
+			if len(cfg.DeviceIDs) == 0 || slices.Contains(cfg.DeviceIDs, deviceListIndex) {
+				newDevice, err := NewDevice(deviceListIndex, deviceListEnabledCount, CLdeviceID, workDone)
 				if err != nil {
 					return nil, err
 				}

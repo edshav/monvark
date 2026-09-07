@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -24,8 +23,6 @@ import (
 const (
 	defaultConfigFilename = "monvark.conf"
 	defaultLogLevel       = "info"
-	defaultLogDirname     = "logs"
-	defaultLogFilename    = "monvark.log"
 )
 
 var (
@@ -38,7 +35,6 @@ var (
 	defaultRPCPortTestNet = "19509"
 	defaultRPCPortSimNet  = "19956"
 	defaultAPIPort        = "3333"
-	defaultLogDir         = filepath.Join(minerHomeDir, defaultLogDirname)
 	defaultAutocalibrate  = 500
 
 	minIntensity = 8
@@ -52,17 +48,15 @@ type config struct {
 
 	// Config / log options
 	ConfigFile string `short:"C" long:"configfile" description:"Path to configuration file"`
-	LogDir     string `long:"logdir" description:"Directory to log output."`
 	OpenCLLib  string `long:"opencl-lib" description:"Full path to the OpenCL library to load, for installations the built-in search does not cover"`
-	DebugLevel string `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical} -- You may also specify <subsystem>=<level>,<subsystem2>=<level>,... to set the log level for individual subsystems -- Use show to list available subsystems"`
+	DebugLevel string `short:"d" long:"debuglevel" description:"Logging level {trace, debug, info, warn, error, critical}"`
 
 	// Debugging options
 	Profile    string `long:"profile" description:"Enable HTTP profiling on given port -- NOTE port must be between 1024 and 65536"`
 	CPUProfile string `long:"cpuprofile" description:"Write CPU profile to the specified file"`
-	MemProfile string `long:"memprofile" description:"Write mem profile to the specified file"`
 
 	// Status API options
-	APIListeners []string `long:"apilisten" description:"Add an interface/port to expose miner status API"`
+	APIListen string `long:"apilisten" description:"Interface/port to expose the miner status API on"`
 
 	// RPC connection options
 	RPCUser     string `short:"u" long:"rpcuser" description:"RPC username"`
@@ -88,20 +82,6 @@ type config struct {
 	WorkSizeInts      []uint32
 }
 
-// removeDuplicateAddresses returns a new slice with all duplicate entries in
-// addrs removed.
-func removeDuplicateAddresses(addrs []string) []string {
-	result := make([]string, 0, len(addrs))
-	seen := map[string]struct{}{}
-	for _, val := range addrs {
-		if _, ok := seen[val]; !ok {
-			result = append(result, val)
-			seen[val] = struct{}{}
-		}
-	}
-	return result
-}
-
 // normalizeAddress returns addr with the passed default port appended if
 // there is not already a port specified.
 func normalizeAddress(addr string, defaultPort string) string {
@@ -112,85 +92,20 @@ func normalizeAddress(addr string, defaultPort string) string {
 	return addr
 }
 
-// normalizeAddresses returns a new slice with all the passed peer addresses
-// normalized with the given default port, and all duplicates removed.
-func normalizeAddresses(addrs []string, defaultPort string) []string {
-	for i, addr := range addrs {
-		addrs[i] = normalizeAddress(addr, defaultPort)
-	}
-
-	return removeDuplicateAddresses(addrs)
-}
-
-// validLogLevel returns whether or not logLevel is a valid debug log level.
-func validLogLevel(logLevel string) bool {
-	_, ok := slog.LevelFromString(logLevel)
-	return ok
-}
-
-// supportedSubsystems returns a sorted slice of the supported subsystems for
-// logging purposes.
-func supportedSubsystems() []string {
-	// Convert the subsystemLoggers map keys to a slice.
-	subsystems := make([]string, 0, len(subsystemLoggers))
-	for subsysID := range subsystemLoggers {
-		subsystems = append(subsystems, subsysID)
-	}
-
-	// Sort the subsytems for stable display.
-	sort.Strings(subsystems)
-	return subsystems
-}
-
-// parseAndSetDebugLevels attempts to parse the specified debug level and set
-// the levels accordingly.  An appropriate error is returned if anything is
-// invalid.
-func parseAndSetDebugLevels(debugLevel string) error {
-	// When the specified string doesn't have any delimters, treat it as
-	// the log level for all subsystems.
-	if !strings.Contains(debugLevel, ",") && !strings.Contains(debugLevel, "=") {
-		// Validate debug log level.
-		if !validLogLevel(debugLevel) {
-			str := "the specified debug level [%v] is invalid"
-			return fmt.Errorf(str, debugLevel)
+// parseInts parses a per-device setting: either a single value that applies to
+// every device, such as "600", or one value per device, such as "450,600".
+func parseInts(name, s string) ([]int, error) {
+	fields := strings.Split(s, ",")
+	values := make([]int, len(fields))
+	for i, field := range fields {
+		v, err := strconv.Atoi(strings.TrimSpace(field))
+		if err != nil {
+			return nil, fmt.Errorf("could not convert %s %q to int: %w", name,
+				field, err)
 		}
-
-		// Change the logging level for all subsystems.
-		setLogLevels(debugLevel)
-
-		return nil
+		values[i] = v
 	}
-
-	// Split the specified string into subsystem/level pairs while detecting
-	// issues and update the log levels accordingly.
-	for _, logLevelPair := range strings.Split(debugLevel, ",") {
-		if !strings.Contains(logLevelPair, "=") {
-			str := "the specified debug level contains an invalid " +
-				"subsystem/level pair [%v]"
-			return fmt.Errorf(str, logLevelPair)
-		}
-
-		// Extract the specified subsystem and log level.
-		fields := strings.Split(logLevelPair, "=")
-		subsysID, logLevel := fields[0], fields[1]
-
-		// Validate subsystem.
-		if _, exists := subsystemLoggers[subsysID]; !exists {
-			str := "the specified subsystem [%v] is invalid -- " +
-				"supported subsystems %v"
-			return fmt.Errorf(str, subsysID, supportedSubsystems())
-		}
-
-		// Validate log level.
-		if !validLogLevel(logLevel) {
-			str := "the specified debug level [%v] is invalid"
-			return fmt.Errorf(str, logLevel)
-		}
-
-		setLogLevel(subsysID, logLevel)
-	}
-
-	return nil
+	return values, nil
 }
 
 // cleanAndExpandPath expands environement variables and leading ~ in the
@@ -224,13 +139,11 @@ func loadConfig() (*config, []string, error) {
 	cfg := config{
 		ConfigFile: defaultConfigFile,
 		DebugLevel: defaultLogLevel,
-		LogDir:     defaultLogDir,
 		RPCServer:  defaultRPCServer,
 		RPCCert:    defaultRPCCertFile,
 	}
 
 	// Create the home directory if it doesn't already exist.
-	funcName := "loadConfig"
 	err := os.MkdirAll(minerHomeDir, 0700)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -255,7 +168,7 @@ func loadConfig() (*config, []string, error) {
 	appName = strings.TrimSuffix(appName, filepath.Ext(appName))
 	usageMessage := fmt.Sprintf("Use %s -h to show usage", appName)
 	if preCfg.ShowVersion {
-		fmt.Printf("%s %s version %s (Go version %s %s/%s)\n", appName, gpuLib(),
+		fmt.Printf("%s %s version %s (Go version %s %s/%s)\n", appName, gpuLib,
 			Version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		os.Exit(0)
 	}
@@ -313,102 +226,29 @@ func loadConfig() (*config, []string, error) {
 		return nil, nil, err
 	}
 
-	// Check the autocalibrations if the user is setting that.
+	// Parse the per-device settings.
+	cfg.AutocalibrateInts = []int{defaultAutocalibrate}
 	if len(cfg.Autocalibrate) > 0 {
-		// Parse a list like -A 450,600
-		if strings.Contains(cfg.Autocalibrate, ",") {
-			specifiedAutocalibrates := strings.Split(cfg.Autocalibrate, ",")
-			cfg.AutocalibrateInts = make([]int, len(specifiedAutocalibrates))
-			for i := range specifiedAutocalibrates {
-				j, err := strconv.Atoi(specifiedAutocalibrates[i])
-				if err != nil {
-					err := fmt.Errorf("could not convert autocalibration "+
-						"(%v) to int: %w", specifiedAutocalibrates[i], err)
-					fmt.Fprintln(os.Stderr, err)
-					return nil, nil, err
-				}
-
-				cfg.AutocalibrateInts[i] = j
-			}
-			// Use specified device like -A 600
-		} else {
-			cfg.AutocalibrateInts = make([]int, 1)
-			i, err := strconv.Atoi(cfg.Autocalibrate)
-			if err != nil {
-				err := fmt.Errorf("could not convert autocalibration %v "+
-					"to int: %w", cfg.Autocalibrate, err)
-				fmt.Fprintln(os.Stderr, err)
-				return nil, nil, err
-			}
-
-			cfg.AutocalibrateInts[0] = i
+		cfg.AutocalibrateInts, err = parseInts("autocalibration", cfg.Autocalibrate)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return nil, nil, err
 		}
-		// Apply default
-	} else {
-		cfg.AutocalibrateInts = []int{defaultAutocalibrate}
 	}
 
-	// Check the devices if the user is setting that.
 	if len(cfg.Devices) > 0 {
-		// Parse a list like -D 1,2
-		if strings.Contains(cfg.Devices, ",") {
-			specifiedDevices := strings.Split(cfg.Devices, ",")
-			cfg.DeviceIDs = make([]int, len(specifiedDevices))
-			for i := range specifiedDevices {
-				j, err := strconv.Atoi(specifiedDevices[i])
-				if err != nil {
-					err := fmt.Errorf("could not convert device number %v "+
-						"(%v) to int: %w", i+1, specifiedDevices[i], err)
-					fmt.Fprintln(os.Stderr, err)
-					return nil, nil, err
-				}
-
-				cfg.DeviceIDs[i] = j
-			}
-			// Use specified device like -D 1
-		} else {
-			cfg.DeviceIDs = make([]int, 1)
-			i, err := strconv.Atoi(cfg.Devices)
-			if err != nil {
-				err := fmt.Errorf("could not convert specified device %v "+
-					"to int: %w", cfg.Devices, err)
-				fmt.Fprintln(os.Stderr, err)
-				return nil, nil, err
-			}
-
-			cfg.DeviceIDs[0] = i
+		cfg.DeviceIDs, err = parseInts("device", cfg.Devices)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return nil, nil, err
 		}
 	}
 
-	// Check the intensity if the user is setting that.
 	if len(cfg.Intensity) > 0 {
-		// Parse a list like -i 29,30
-		if strings.Contains(cfg.Intensity, ",") {
-			specifiedIntensities := strings.Split(cfg.Intensity, ",")
-			cfg.IntensityInts = make([]int, len(specifiedIntensities))
-			for i := range specifiedIntensities {
-				j, err := strconv.Atoi(specifiedIntensities[i])
-				if err != nil {
-					err := fmt.Errorf("could not convert intensity "+
-						"(%v) to int: %w", specifiedIntensities[i], err)
-					fmt.Fprintln(os.Stderr, err)
-					return nil, nil, err
-				}
-
-				cfg.IntensityInts[i] = j
-			}
-			// Use specified intensity like -i 29
-		} else {
-			cfg.IntensityInts = make([]int, 1)
-			i, err := strconv.Atoi(cfg.Intensity)
-			if err != nil {
-				err := fmt.Errorf("could not convert intensity %v "+
-					"to int: %w", cfg.Intensity, err)
-				fmt.Fprintln(os.Stderr, err)
-				return nil, nil, err
-			}
-
-			cfg.IntensityInts[0] = i
+		cfg.IntensityInts, err = parseInts("intensity", cfg.Intensity)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return nil, nil, err
 		}
 	}
 
@@ -423,35 +263,15 @@ func loadConfig() (*config, []string, error) {
 		}
 	}
 
-	// Check the work size if the user is setting that.
 	if len(cfg.WorkSize) > 0 {
-		// Parse a list like -W 536870912,1073741824
-		if strings.Contains(cfg.WorkSize, ",") {
-			specifiedWorkSizes := strings.Split(cfg.WorkSize, ",")
-			cfg.WorkSizeInts = make([]uint32, len(specifiedWorkSizes))
-			for i := range specifiedWorkSizes {
-				j, err := strconv.Atoi(specifiedWorkSizes[i])
-				if err != nil {
-					err := fmt.Errorf("could not convert worksize "+
-						"(%v) to int: %w", specifiedWorkSizes[i], err)
-					fmt.Fprintln(os.Stderr, err)
-					return nil, nil, err
-				}
-
-				cfg.WorkSizeInts[i] = uint32(j)
-			}
-			// Use specified worksize like -W 1073741824
-		} else {
-			cfg.WorkSizeInts = make([]uint32, 1)
-			i, err := strconv.Atoi(cfg.WorkSize)
-			if err != nil {
-				err := fmt.Errorf("could not convert worksize %v "+
-					"to int: %w", cfg.WorkSize, err)
-				fmt.Fprintln(os.Stderr, err)
-				return nil, nil, err
-			}
-
-			cfg.WorkSizeInts[0] = uint32(i)
+		workSizes, err := parseInts("worksize", cfg.WorkSize)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return nil, nil, err
+		}
+		cfg.WorkSizeInts = make([]uint32, len(workSizes))
+		for i, workSize := range workSizes {
+			cfg.WorkSizeInts[i] = uint32(workSize)
 		}
 	}
 
@@ -476,26 +296,20 @@ func loadConfig() (*config, []string, error) {
 		}
 	}
 
-	// Special show command to list supported subsystems and exit.
-	if cfg.DebugLevel == "show" {
-		fmt.Println("Supported subsystems", supportedSubsystems())
-		os.Exit(0)
-	}
-
-	// Initialize log rotation.  After log rotation has been initialized,
-	// the logger variables may be used.
-	initLogRotator(filepath.Join(cfg.LogDir, defaultLogFilename))
-
-	// Parse, validate, and set debug log level(s).
-	if err := parseAndSetDebugLevels(cfg.DebugLevel); err != nil {
-		err := fmt.Errorf("%s: %w", funcName, err)
+	// Set the log level.
+	level, ok := slog.LevelFromString(cfg.DebugLevel)
+	if !ok {
+		err := fmt.Errorf("loadConfig: the specified debug level [%v] is invalid",
+			cfg.DebugLevel)
 		fmt.Fprintln(os.Stderr, err)
 		fmt.Fprintln(os.Stderr, usageMessage)
 		return nil, nil, err
 	}
+	mainLog.SetLevel(level)
+	minrLog.SetLevel(level)
 
-	if len(cfg.APIListeners) != 0 {
-		cfg.APIListeners = normalizeAddresses(cfg.APIListeners, defaultAPIPort)
+	if cfg.APIListen != "" {
+		cfg.APIListen = normalizeAddress(cfg.APIListen, defaultAPIPort)
 	}
 
 	// Handle environment variable expansion in the RPC certificate path.

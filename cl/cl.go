@@ -64,18 +64,11 @@ const (
 	PlatformNotFound int32 = -1001
 )
 
-// Device types, as returned by CL_DEVICE_TYPE and accepted by clGetDeviceIDs.
-const (
-	DeviceTypeCPU DeviceType = 1 << 1
-	DeviceTypeGPU DeviceType = 1 << 2
-	DeviceTypeAll DeviceType = 0xFFFFFFFF
-)
+// DeviceTypeAll is the only device type this miner asks clGetDeviceIDs for.
+const DeviceTypeAll DeviceType = 0xFFFFFFFF
 
-// Device parameters readable via DeviceInfoString and DeviceInfoUint64.
-const (
-	DeviceName      DeviceInfo = 0x102B
-	DeviceTypeParam DeviceInfo = 0x1000
-)
+// DeviceName is the only device parameter read here.
+const DeviceName DeviceInfo = 0x102B
 
 // MemReadWrite is the only buffer access mode this miner creates.
 const MemReadWrite MemFlags = 1 << 0
@@ -180,14 +173,6 @@ func DeviceInfoString(device DeviceID, name DeviceInfo) (string, int32) {
 		return "", status
 	}
 	return string(bytes.TrimRight(buf, "\x00")), Success
-}
-
-// DeviceInfoUint64 returns a scalar device parameter.  Every one this miner
-// reads is a cl_bitfield, which the specification fixes at 8 bytes.
-func DeviceInfoUint64(device DeviceID, name DeviceInfo) (uint64, int32) {
-	var value uint64
-	status := getDeviceInfo(device, name, 8, unsafe.Pointer(&value), nil)
-	return value, status
 }
 
 // CreateProgramWithSource creates a program from one source string, which is

@@ -2,12 +2,14 @@
 package main
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/pprof"
-	"time"
+	"syscall"
 )
 
 var (
@@ -22,14 +24,9 @@ func monvarkMain() error {
 		return err
 	}
 	cfg = tcfg
-	defer func() {
-		if logRotator != nil {
-			logRotator.Close()
-		}
-	}()
 
 	// Show version at startup.
-	mainLog.Infof("Version %s %s (Go version %s %s/%s)", Version, gpuLib(),
+	mainLog.Infof("Version %s %s (Go version %s %s/%s)", Version, gpuLib,
 		runtime.Version(), runtime.GOOS, runtime.GOARCH)
 
 	// Enable http profiling server if requested.
@@ -61,28 +58,23 @@ func monvarkMain() error {
 		defer pprof.StopCPUProfile()
 	}
 
-	// Write mem profile if requested.
-	if cfg.MemProfile != "" {
-		f, err := os.Create(cfg.MemProfile)
-		if err != nil {
-			mainLog.Errorf("Unable to create cpu profile: %v", err)
-			return err
-		}
-		timer := time.NewTimer(time.Minute * 20) // 20 minutes
-		go func() {
-			<-timer.C
-			pprof.WriteHeapProfile(f)
-			f.Close()
-		}()
-	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt,
+		syscall.SIGTERM)
 
-	ctx := shutdownListener()
+	// Restore the default signal handling as soon as the first signal has been
+	// delivered, so a second one kills a shutdown that is not progressing.
+	go func() {
+		<-ctx.Done()
+		minrLog.Info("Received shutdown signal.  Shutting down...")
+		stop()
+	}()
+
 	m, err := NewMiner(ctx)
 	if err != nil {
 		mainLog.Criticalf("Error initializing miner: %v", err)
 		return err
 	}
-	if len(cfg.APIListeners) != 0 {
+	if cfg.APIListen != "" {
 		go RunMonitor(m)
 	}
 	m.Run(ctx)
@@ -91,9 +83,6 @@ func monvarkMain() error {
 }
 
 func main() {
-	// Use all processor cores.
-	runtime.GOMAXPROCS(runtime.NumCPU())
-
 	// Work around defer not working after os.Exit()
 	if err := monvarkMain(); err != nil {
 		os.Exit(1)

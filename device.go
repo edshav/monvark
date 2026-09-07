@@ -33,12 +33,6 @@ func init() {
 	randDeviceOffset2 = buf[1]
 }
 
-// Device type strings as reported by CL_DEVICE_TYPE.
-const (
-	DeviceTypeCPU = "CPU"
-	DeviceTypeGPU = "GPU"
-)
-
 // initNonces initialize the nonces for the device such that each device in the
 // same system is doing different work while also helping prevent collisions
 // across multiple processes and systems working on the same template.
@@ -105,14 +99,9 @@ func (d *Device) updateCurrentWork(ctx context.Context) {
 	minrLog.Tracef("pre-nonce: %x", d.work.Data[:])
 
 	// Ensure the work data is updated with the extra nonce associated with the
-	// device for solo mining.
-	//
-	// The extra nonce is provided by the pool when pool mining, so there is no
-	// need to update it in that case.
+	// device.
 	const en1Offset = 128 + 4*work.Nonce1Word
-	if d.work.IsGetWork {
-		binary.LittleEndian.PutUint32(d.work.Data[en1Offset:], d.extraNonce)
-	}
+	binary.LittleEndian.PutUint32(d.work.Data[en1Offset:], d.extraNonce)
 
 	// Ensure the work data is updated with the second extra nonce associated
 	// with the device.
@@ -120,14 +109,9 @@ func (d *Device) updateCurrentWork(ctx context.Context) {
 		d.extraNonce2)
 
 	// Set additional byte with the device id offset by a second per-process
-	// random device offset to support up to 65536 devices with getwork (solo)
-	// mining.  Pool mining does not support the additional byte, so it is not
-	// needed in that case.  Note that this also means pool mining only supports
-	// 256 devices per client (aka process instance).
-	if d.work.IsGetWork {
-		deviceID := uint8((uint32(d.index) + uint32(randDeviceOffset2)) % 256)
-		d.work.Data[128+4*work.Nonce3Word] = deviceID
-	}
+	// random device offset to support up to 65536 devices.
+	deviceID := uint8((uint32(d.index) + uint32(randDeviceOffset2)) % 256)
+	d.work.Data[128+4*work.Nonce3Word] = deviceID
 
 	// Hash the two first blocks.
 	d.midstate = blake3.Block(blake3.IV, d.work.Data[0:64], blake3.FlagChunkStart)
@@ -172,7 +156,6 @@ func (d *Device) foundCandidate(ts, nonce0, nonce1, nonce2 uint32) {
 		minrLog.Errorf("DEV #%d: GPU and host disagree on the hash of a "+
 			"candidate: %v does not end in a zero word", d.index, hash)
 		d.hashMismatches++
-		d.invalidShares++
 		return
 	}
 
@@ -182,7 +165,6 @@ func (d *Device) foundCandidate(ts, nonce0, nonce1, nonce2 uint32) {
 	if hashNum.Cmp(chainParams.PowLimit) > 0 {
 		minrLog.Errorf("DEV #%d: Hardware error found, hash %v above "+
 			"minimum target %064x", d.index, hash, chainParams.PowLimit)
-		d.invalidShares++
 		return
 	}
 
@@ -196,7 +178,6 @@ func (d *Device) foundCandidate(ts, nonce0, nonce1, nonce2 uint32) {
 		} else {
 			minrLog.Infof("DEV #%d: Found hash with work below target! %v (yay)",
 				d.index, hash)
-			d.validShares++
 			d.workDone <- data
 		}
 	}

@@ -8,7 +8,6 @@ linters:
   enable:
     - asciicheck
     - bidichk
-    - bodyclose
     - containedctx
     - dupword
     - durationcheck
@@ -23,7 +22,6 @@ linters:
     - predeclared
     - reassign
     - revive
-    - rowserrcheck
     - staticcheck
     - tparallel
     - unconvert

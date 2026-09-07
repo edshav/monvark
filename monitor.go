@@ -21,7 +21,6 @@ type MinerStatus struct {
 type DeviceStatus struct {
 	Index      int    `json:"index"`
 	DeviceName string `json:"deviceName"`
-	DeviceType string `json:"deviceType"`
 
 	HashRate          float64 `json:"hashRate"`
 	HashRateFormatted string  `json:"hashRateFormatted"`
@@ -36,17 +35,12 @@ var (
 func RunMonitor(tm *Miner) {
 	m = tm
 
-	if len(cfg.APIListeners) != 0 {
-		http.HandleFunc("/", getMinerStatus)
-
-		for _, addr := range cfg.APIListeners {
-			err := http.ListenAndServe(addr, nil)
-
-			if err != nil {
-				mainLog.Warnf("Unable to create monitor: %v", err)
-				return
-			}
-		}
+	// The status API gets a mux of its own: --profile registers "/" on the
+	// default one, and a second registration of the same pattern panics.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", getMinerStatus)
+	if err := http.ListenAndServe(cfg.APIListen, mux); err != nil {
+		mainLog.Warnf("Unable to create monitor: %v", err)
 	}
 }
 
@@ -68,7 +62,6 @@ func getMinerStatus(w http.ResponseWriter, _ *http.Request) {
 		ms.Devices = append(ms.Devices, &DeviceStatus{
 			Index:             d.index,
 			DeviceName:        d.deviceName,
-			DeviceType:        d.deviceType,
 			HashRate:          hashRate,
 			HashRateFormatted: util.FormatHashRate(hashRate),
 			Started:           d.started,
