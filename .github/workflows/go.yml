@@ -15,9 +15,13 @@ jobs:
         with:
           go-version: 'stable'
       - name: Install linters
+        # golangci-lint typechecks with the go/types from its own build, so it
+        # must be built with a Go at least as new as the toolchain above.  When
+        # stable rolls to a new Go, this pin has to move with it or every run
+        # fails inside the standard library.  v2.13.2 is built with go1.27.
         run: |
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
-            | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.13.2
       - name: Test and lint
         run: ./run_tests.sh
 
