@@ -326,3 +326,46 @@ func (n *nodeProc) Stop() {
 		<-n.exited
 	}
 }
+
+// WaitSynced blocks until the node has caught up with the network.  Mining does
+// not start before this returns.
+func (n *nodeProc) WaitSynced(ctx context.Context) error {
+	const poll = 2 * time.Second
+
+	for {
+		if n.hasExited() {
+			return fmt.Errorf("the node exited while syncing: %v",
+				n.cmd.ProcessState)
+		}
+
+		info, err := n.rpc.GetBlockChainInfo(ctx)
+		if err != nil {
+			return fmt.Errorf("unable to read the node's chain state: %w", err)
+		}
+
+		// The gate is the boolean, never blocks >= headers: on a clean machine
+		// both are 0 before any header arrives, which reads as synced and
+		// mines at height 1.
+		if !info.InitialBlockDownload {
+			mainLog.Infof("Synced at height %d.", info.Blocks)
+			return nil
+		}
+
+		// The peer count is not decoration.  InitialBlockDownload is
+		// !chain.IsCurrent(), and IsCurrent never becomes true without peers,
+		// so a machine that cannot reach the network would otherwise sit at
+		// 0.0%% forever with nothing to explain why.
+		peers, err := n.rpc.GetConnectionCount(ctx)
+		if err != nil {
+			peers = 0
+		}
+		mainLog.Infof("Syncing %5.1f%%  %d/%d blocks  %d peers",
+			info.VerificationProgress*100, info.Blocks, info.Headers, peers)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+}
