@@ -38,9 +38,12 @@ func TestDeviceHashAgreesWithHost(t *testing.T) {
 	// foundCandidate from trying to submit anything.
 	cfg = &config{Benchmark: true, AutocalibrateInts: []int{500}}
 
+	// cl.Load already succeeded, so an OpenCL library is present: a failure
+	// here is a real one -- e.g. clBuildProgram failing to compile the kernel
+	// -- not an absent GPU, and must fail the test rather than skip it.
 	devices, err := newMinerDevs(make(chan []byte, 10))
 	if err != nil {
-		t.Skipf("could not open the OpenCL devices: %v", err)
+		t.Fatalf("could not open the OpenCL devices: %v", err)
 	}
 	if len(devices) == 0 {
 		t.Skip("no OpenCL devices")
