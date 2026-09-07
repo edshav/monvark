@@ -312,8 +312,9 @@ func (m *Miner) expiryThread(ctx context.Context) {
 			minrLog.Warnf("No work for over %v and GetWork failed (%d of %d "+
 				"before giving up): %v", workExpiry, failures, maxFailures, err)
 			if failures >= maxFailures {
-				minrLog.Criticalf("The node has not served work for %v; "+
-					"shutting down", time.Duration(maxFailures)*workExpiry)
+				minrLog.Criticalf("The node has not served work for over %v "+
+					"and %d consecutive GetWork polls failed; shutting down",
+					workExpiry, maxFailures)
 				m.cancel()
 			}
 			continue
@@ -331,13 +332,17 @@ func (m *Miner) expiryThread(ctx context.Context) {
 			continue
 		}
 
-		if bytes.Equal(data, current.Data[:len(data)]) {
+		if len(data) <= len(current.Data) &&
+			bytes.Equal(data, current.Data[:len(data)]) {
 			minrLog.Debugf("No new work for %v; the chain is quiet and the "+
 				"node agrees", workExpiry)
 		} else {
 			minrLog.Warnf("No pushed work for %v; the push path had stalled "+
 				"and polling recovered it", workExpiry)
 		}
+		// Re-publishing identical work is not a no-op: it refreshes
+		// TimeReceived, so a quiet chain does not leave the ticker polling
+		// every minute forever.
 		onSoloWork(ctx, data, target, "expiry", m)
 	}
 }
