@@ -19,16 +19,20 @@ imported Monetarium/Decred packages (`dcrutil`, `chainhash`, `blake256`,
 `rpcclient`, `chaincfg` — used in `config.go`, `device.go` and `miner.go`);
 that is not in scope to change.
 
-**The module path is ahead of the repository that backs it.**
-`github.com/edshav/monvark` does not exist as a GitHub repository yet —
-`origin` is still `git@github.com:edshav/monetarium-gominer.git`, and `master`
-is still pinned at the pristine upstream fork point (`68791b0`) so that
-`git diff master..monetarium-retarget` is exactly the Monetarium delta. No
-decision has been made yet about renaming the remote or retagging `master`;
-work happens on `monetarium-retarget`. **The module name must be settled
-before the first `git tag`** — `proxy.golang.org` caches published module
-versions permanently, so a tag pushed under the wrong repository name cannot
-be taken back.
+**Branches and remote.** `origin` is `git@github.com:edshav/monvark.git`,
+matching the module path, and `main` is the only branch. The pristine upstream
+fork point is the tag **`upstream-fork`** (`68791b0`), so
+`git diff upstream-fork..main` is exactly the Monetarium delta — that tag is
+what the old pinned `master` branch used to be for, and deleting it would lose
+the only name for that commit. The old remote
+(`edshav/monetarium-gominer`) still exists untouched but nothing points at it.
+
+The repo also carries the upstream gominer version tags (`v0.2.0`…`v1.0.0`,
+`release-v2.0.0`) **locally only** — their `go.mod` says
+`github.com/decred/gominer`, so they must never be pushed to `monvark`. Push
+branches and specific tags by name; never `git push --tags`.
+`proxy.golang.org` caches published module versions permanently, so the first
+semver tag pushed here is the point of no return for the module name.
 
 ## Build
 
