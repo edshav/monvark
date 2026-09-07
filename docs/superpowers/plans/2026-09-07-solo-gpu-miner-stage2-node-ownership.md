@@ -173,44 +173,31 @@ third parameter, store it on the `Miner` from `main.go`. Use this exact shape:
 func NewMiner(ctx context.Context, devices []*Device, workDone chan []byte) (*Miner, error) {
 ```
 
-- [ ] **Step 2: Add the device construction helper to `main.go`**
-
-Add to `main.go`:
-
-```go
-// newDevices builds every enabled OpenCL device.  It runs before the payout
-// question and before the node starts, so a driver that cannot compile the
-// kernel fails in seconds rather than after a full chain sync.  A device
-// consumes no GPU time until SetWork feeds it, so building early costs nothing.
-func newDevices() ([]*Device, chan []byte, error) {
-	workDone := make(chan []byte, 10)
-	devices, err := newMinerDevs(workDone)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(devices) == 0 {
-		return nil, nil, errors.New("no devices started")
-	}
-	return devices, workDone, nil
-}
-```
-
-Add `"errors"` to `main.go`'s imports.
-
-- [ ] **Step 3: Wire it into `monvarkMain`**
+- [ ] **Step 2: Build the devices in `monvarkMain`**
 
 In `main.go`, immediately after the version line
 (`mainLog.Infof("Version %s %s ...")`), insert:
 
 ```go
 	// Build the devices first.  Everything after this point can take minutes,
-	// and a user whose driver is broken should not wait through it.
-	devices, workDone, err := newDevices()
+	// and a user whose driver is broken should not wait through it.  This is
+	// the full build rather than a cheap enumeration on purpose: getCLDevices
+	// only enumerates, while NewDevice creates the context and compiles
+	// blake3.cl, which is where a driver that enumerates perfectly still
+	// fails.  A device consumes no GPU time until SetWork feeds it.
+	workDone := make(chan []byte, 10)
+	devices, err := newMinerDevs(workDone)
 	if err != nil {
 		mainLog.Criticalf("Error initializing devices: %v", err)
 		return err
 	}
+	if len(devices) == 0 {
+		mainLog.Critical("No devices started")
+		return errors.New("no devices started")
+	}
 ```
+
+Add `"errors"` to `main.go`'s imports.
 
 Then change the `NewMiner` call further down from:
 
@@ -224,7 +211,7 @@ to:
 	m, err := NewMiner(ctx, devices, workDone)
 ```
 
-- [ ] **Step 4: Build and run the existing tests**
+- [ ] **Step 3: Build and run the existing tests**
 
 Run: `go build . && ./run_tests.sh`
 Expected: builds clean; `go test -v ./...` passes, including `device_test.go`'s
@@ -236,7 +223,7 @@ tests are exactly the checks that would catch a mistake. Inventing a test that
 asserts a function was called in a particular order would test the plan, not the
 code.
 
-- [ ] **Step 5: Verify the ordering by hand**
+- [ ] **Step 4: Verify the ordering by hand**
 
 Run: `go build -o /tmp/monvark-t1 . && /tmp/monvark-t1 --opencl-lib /nonexistent -B`
 Expected: fails immediately with an error naming the missing library, before any
@@ -245,7 +232,7 @@ other output. Then:
 Run: `/tmp/monvark-t1 -B` for about ten seconds, Ctrl+C.
 Expected: benchmark mode still runs and reports a hashrate.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add main.go miner.go
@@ -266,7 +253,8 @@ git commit -m "main: Build the devices before the node, not after."
 - Produces:
   - `func payoutAddress(effective, fromFile, filePath string) (addr string, needPrompt bool, err error)`
   - `func validatePayout(addr string, params *chaincfg.Params) error`
-  - `func checkConfigPerms(path string) error`
+  - `func checkPerms(path string) error` — also used by `checkMondConf` in
+    Task 3, which is why it is named for the check and not for the file
   - `func appendMiningAddr(path, addr string) error`
   - `func resolvePayout(cfg *config) (string, error)` — called by `main.go` in
     Task 7, returns the address that Task 3 passes to the node and Task 5
@@ -312,6 +300,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -339,12 +328,9 @@ func TestPayoutAddress(t *testing.T) {
 		fromFile:  "",
 		wantAddr:  "Vs1",
 	}, {
-		name:      "file only",
-		effective: "Vs1",
-		fromFile:  "Vs1",
-		wantAddr:  "Vs1",
-	}, {
-		name:      "flag agrees with file",
+		// Also the case where the flag repeats what the file already says:
+		// after go-flags has merged them the two are indistinguishable.
+		name:      "file supplies it",
 		effective: "Vs1",
 		fromFile:  "Vs1",
 		wantAddr:  "Vs1",
@@ -401,13 +387,17 @@ func TestValidatePayoutRejectsWrongNetwork(t *testing.T) {
 	}
 }
 
-func TestCheckConfigPerms(t *testing.T) {
+func TestCheckPerms(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permission bits are synthesized on Windows")
+	}
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "monvark.conf")
 	if err := os.WriteFile(path, []byte("miningaddr=Vs1\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkConfigPerms(path); err != nil {
+	if err := checkPerms(path); err != nil {
 		t.Fatalf("0600 rejected: %v", err)
 	}
 
@@ -416,18 +406,18 @@ func TestCheckConfigPerms(t *testing.T) {
 	if err := os.Chmod(path, 0620); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkConfigPerms(path); err == nil {
+	if err := checkPerms(path); err == nil {
 		t.Fatal("group-writable config accepted")
 	}
 	if err := os.Chmod(path, 0602); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkConfigPerms(path); err == nil {
+	if err := checkPerms(path); err == nil {
 		t.Fatal("world-writable config accepted")
 	}
 
 	// A file that does not exist yet is not an error: first run creates it.
-	if err := checkConfigPerms(filepath.Join(dir, "absent.conf")); err != nil {
+	if err := checkPerms(filepath.Join(dir, "absent.conf")); err != nil {
 		t.Fatalf("absent config rejected: %v", err)
 	}
 }
@@ -476,9 +466,9 @@ func TestAppendMiningAddr(t *testing.T) {
 
 - [ ] **Step 4: Run the tests to verify they fail**
 
-Run: `go test -run 'TestPayoutAddress|TestValidatePayout|TestCheckConfigPerms|TestAppendMiningAddr' -v .`
+Run: `go test -run 'TestPayoutAddress|TestValidatePayout|TestCheckPerms|TestAppendMiningAddr' -v .`
 Expected: FAIL — `undefined: payoutAddress`, `undefined: validatePayout`,
-`undefined: checkConfigPerms`, `undefined: appendMiningAddr`.
+`undefined: checkPerms`, `undefined: appendMiningAddr`.
 
 - [ ] **Step 5: Write `payout.go`**
 
@@ -493,6 +483,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
+	"strings"
 
 	"github.com/monetarium/monetarium-node/chaincfg"
 	"github.com/monetarium/monetarium-node/txscript/stdaddr"
@@ -535,17 +527,24 @@ func validatePayout(addr string, params *chaincfg.Params) error {
 	return nil
 }
 
-// checkConfigPerms fails when path is group- or world-writable.  Every field in
-// the config file parses back into the config struct, including the payout
-// address, so write access to it is write access to the payout.  A file that
-// does not exist yet is not an error: first run creates it.
-func checkConfigPerms(path string) error {
+// checkPerms fails when path is group- or world-writable.  Both files monvark
+// writes go through it: every field in monvark.conf parses back into the config
+// struct including the payout address, and mond.conf carries the node's
+// credentials -- so write access to either is write access to the payout.  A
+// file that does not exist yet is not an error: first run creates it.
+//
+// Windows is skipped because Go synthesizes the unix mode bits there, so the
+// check would reject files that are in fact fine.
+func checkPerms(path string) error {
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		return nil
 	}
 	if perm := info.Mode().Perm(); perm&0077 != 0 {
 		return fmt.Errorf("%s is writable by others (mode %04o); "+
@@ -566,43 +565,27 @@ func appendMiningAddr(path, addr string) error {
 	return err
 }
 
-// promptPayout asks for an address on out and reads one from in.
-func promptPayout(in io.Reader, out io.Writer) (string, error) {
-	fmt.Fprint(out, "\nNo payout address configured.\n"+
+// promptPayout asks for an address on stdout and reads one from stdin.
+func promptPayout() (string, error) {
+	fmt.Fprint(os.Stdout, "\nNo payout address configured.\n"+
 		"Block rewards are paid to a Monetarium address you control.  Create\n"+
 		"one with monetarium-wallet and paste it below.  The wallet is not\n"+
 		"needed while mining and should not be installed on this machine;\n"+
 		"monvark never holds keys.\n\nPayout address: ")
 
-	line, err := bufio.NewReader(in).ReadString('\n')
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
-	return trimSpace(line), nil
-}
-
-// trimSpace removes surrounding whitespace, including the newline the terminal
-// supplies and the carriage return Windows adds to it.
-func trimSpace(s string) string {
-	start, end := 0, len(s)
-	for start < end && isSpace(s[start]) {
-		start++
-	}
-	for end > start && isSpace(s[end-1]) {
-		end--
-	}
-	return s[start:end]
-}
-
-func isSpace(b byte) bool {
-	return b == ' ' || b == '\t' || b == '\r' || b == '\n'
+	// TrimSpace also removes the carriage return Windows terminals supply.
+	return strings.TrimSpace(line), nil
 }
 
 // resolvePayout returns the address block rewards are paid to, asking the user
 // for one on first run.  Precedence is the command line, then the config file,
 // then the prompt.
 func resolvePayout(cfg *config) (string, error) {
-	if err := checkConfigPerms(cfg.ConfigFile); err != nil {
+	if err := checkPerms(cfg.ConfigFile); err != nil {
 		return "", err
 	}
 
@@ -628,7 +611,7 @@ func resolvePayout(cfg *config) (string, error) {
 			cfg.ConfigFile)
 	}
 
-	addr, err = promptPayout(os.Stdin, os.Stdout)
+	addr, err = promptPayout()
 	if err != nil {
 		return "", err
 	}
@@ -663,7 +646,7 @@ func isTerminal(f *os.File) bool {
 
 - [ ] **Step 7: Run the tests to verify they pass**
 
-Run: `go test -run 'TestPayoutAddress|TestValidatePayout|TestCheckConfigPerms|TestAppendMiningAddr' -v .`
+Run: `go test -run 'TestPayoutAddress|TestValidatePayout|TestCheckPerms|TestAppendMiningAddr' -v .`
 Expected: PASS, all four.
 
 If `TestValidatePayoutRejectsWrongNetwork` fails because the hardcoded simnet
@@ -705,6 +688,7 @@ git commit -m "config: Ask for the payout address once, and validate it first."
   - `func checkMondConf(path string) error`
   - `func mondArgs(cfg *config, confPath, appData, addr string, p2pBusy bool) []string`
   - `func mondPath(exeDir, override string) (string, error)`
+  - `func freeAddr(host string) (string, error)`, `func portFree(hostport string) bool`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -723,26 +707,15 @@ import (
 	"testing"
 )
 
-func TestMondConf(t *testing.T) {
+func TestMondConfOmitsPayoutKeys(t *testing.T) {
 	got := mondConf("u", "p", "127.0.0.1:41287", "/h/rpc.cert", "/h/rpc.key")
-
-	for _, want := range []string{
-		"rpcuser=u",
-		"rpcpass=p",
-		"rpclisten=127.0.0.1:41287",
-		"rpccert=/h/rpc.cert",
-		"rpckey=/h/rpc.key",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("mond.conf missing %q:\n%s", want, got)
-		}
-	}
 
 	// The two keys that could redirect the payout must never be written to a
 	// file.  miningaddr goes on the command line because the node picks
 	// uniformly at random among its configured addresses and go-flags appends
 	// rather than overrides, so an address in both places pays a random
-	// fraction of blocks elsewhere.
+	// fraction of blocks elsewhere.  That the other five fields interpolate is
+	// not tested: it is one Sprintf with no branches.
 	for _, forbidden := range []string{"miningaddr", "generate"} {
 		if strings.Contains(got, forbidden) {
 			t.Errorf("mond.conf contains %q, which must stay on the command "+
@@ -782,6 +755,8 @@ func TestCheckMondConf(t *testing.T) {
 		}
 	}
 
+	// The permission refusal itself is checkPerms', tested in payout_test.go;
+	// this only confirms mond.conf goes through it.
 	if runtime.GOOS != "windows" {
 		perm := filepath.Join(dir, "perm.conf")
 		if err := os.WriteFile(perm, []byte(mondConf("u", "p", "a", "c", "k")), 0666); err != nil {
@@ -903,29 +878,13 @@ func TestPortFree(t *testing.T) {
 	}
 }
 
-func TestFreePort(t *testing.T) {
-	port, err := freePort("127.0.0.1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if port <= 0 || port > 65535 {
-		t.Fatalf("freePort returned %d", port)
-	}
-	// The port it hands back must actually be bindable.
-	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", itoa(port)))
-	if err != nil {
-		t.Fatalf("port %d not bindable: %v", port, err)
-	}
-	ln.Close()
-}
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `go test -run 'TestMond|TestPortFree|TestFreePort' -v .`
+Run: `go test -run 'TestMond|TestPortFree' -v .`
 Expected: FAIL — `undefined: mondConf`, `undefined: checkMondConf`,
-`undefined: mondArgs`, `undefined: mondPath`, `undefined: portFree`,
-`undefined: freePort`, `undefined: itoa`.
+`undefined: mondArgs`, `undefined: mondPath`, `undefined: portFree`.
 
 - [ ] **Step 3: Write `node.go`**
 
@@ -945,7 +904,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -958,22 +916,18 @@ type nodeProc struct {
 	rpc *rpcclient.Client
 }
 
-// itoa is strconv.Itoa under a shorter name, used where a port becomes part of
-// an address.
-func itoa(i int) string { return strconv.Itoa(i) }
-
-// freePort binds port 0 on host, reads the port the OS assigned and releases
-// it.  There is a small window between the release and the node's own bind in
-// which another process could take it; it is local, brief, and the standard way
-// to do this.  The node failing to bind is a clear startup error, not a silent
-// misbehaviour.
-func freePort(host string) (int, error) {
+// freeAddr binds port 0 on host, returns the host:port the OS assigned, and
+// releases it.  There is a small window between the release and the node's own
+// bind in which another process could take it; it is local, brief, and the
+// standard way to do this.  The node failing to bind is a clear startup error,
+// not a silent misbehaviour.
+func freeAddr(host string) (string, error) {
 	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port, nil
+	return ln.Addr().String(), nil
 }
 
 // portFree reports whether hostport can be bound right now.
@@ -1025,11 +979,8 @@ func checkMondConf(path string) error {
 		return err
 	}
 
-	if info, err := os.Stat(path); err == nil {
-		if perm := info.Mode().Perm(); perm&0077 != 0 && runtime.GOOS != "windows" {
-			return fmt.Errorf("%s is writable by others (mode %04o); "+
-				"run: chmod 600 %s", path, perm, path)
-		}
+	if err := checkPerms(path); err != nil {
+		return err
 	}
 
 	for _, line := range strings.Split(string(body), "\n") {
@@ -1113,11 +1064,10 @@ func nodeStart(ctx context.Context, cfg *config, addr string) (*nodeProc, error)
 		return nil, err
 	}
 
-	rpcPort, err := freePort("127.0.0.1")
+	rpcListen, err := freeAddr("127.0.0.1")
 	if err != nil {
 		return nil, err
 	}
-	rpcListen := net.JoinHostPort("127.0.0.1", itoa(rpcPort))
 
 	rpcUser, err := randomCredential()
 	if err != nil {
@@ -1254,8 +1204,8 @@ func (n *nodeProc) Stop() {
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `go test -run 'TestMond|TestPortFree|TestFreePort' -v .`
-Expected: PASS, all six.
+Run: `go test -run 'TestMond|TestPortFree' -v .`
+Expected: PASS, all four.
 
 - [ ] **Step 5: Make `txscript` a direct dependency**
 
@@ -1288,109 +1238,27 @@ without peers, so a firewalled machine would otherwise sit at 0.0% forever with
 no explanation.
 
 **Files:**
-- Modify: `node.go` — add `synced`, `syncLine`, `WaitSynced`
-- Modify: `node_test.go` — add the predicate tests
+- Modify: `node.go` — add `WaitSynced`
 
 **Interfaces:**
 - Consumes: `nodeProc` and its `rpc` field (Task 3).
 - Produces: `func (n *nodeProc) WaitSynced(ctx context.Context) error`, called by
   `main.go` in Task 7.
 
-- [ ] **Step 1: Write the failing tests**
+**No unit test in this task, deliberately.** The gate is `!InitialBlockDownload`
+and the progress line is one `fmt.Sprintf`; a test over a synthesized
+`GetBlockChainInfoResult` would be asserting Go's `!` operator and a format
+string, and could not fail for any reason a reader of the code would care about.
+The decision worth protecting — that the gate is the boolean and never
+`blocks >= headers` — is protected by the comment on it, since only a deliberate
+rewrite could undo it. The real check is step 3's manual one and task 8's
+clean-machine run.
 
-Append to `node_test.go`:
-
-```go
-func TestSynced(t *testing.T) {
-	// The gate is the boolean, never blocks >= headers.  On a clean machine
-	// both counts are 0 before any header arrives, which would read as
-	// "synced" and mine at height 1.
-	fresh := &chainjson.GetBlockChainInfoResult{
-		Blocks:               0,
-		Headers:              0,
-		InitialBlockDownload: true,
-	}
-	if synced(fresh) {
-		t.Error("a node with no headers yet reported synced")
-	}
-
-	// Mid-sync, with the counts equal because headers arrive in batches.
-	midway := &chainjson.GetBlockChainInfoResult{
-		Blocks:               1000,
-		Headers:              1000,
-		InitialBlockDownload: true,
-	}
-	if synced(midway) {
-		t.Error("a node still in initial block download reported synced")
-	}
-
-	done := &chainjson.GetBlockChainInfoResult{
-		Blocks:               31023,
-		Headers:              31023,
-		InitialBlockDownload: false,
-	}
-	if !synced(done) {
-		t.Error("a caught-up node reported not synced")
-	}
-}
-
-func TestSyncLine(t *testing.T) {
-	info := &chainjson.GetBlockChainInfoResult{
-		Blocks:               10612,
-		Headers:              31023,
-		VerificationProgress: 0.342,
-	}
-	got := syncLine(info, 6)
-
-	for _, want := range []string{"34.2", "10612", "31023", "6"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("sync line missing %q: %q", want, got)
-		}
-	}
-
-	// Zero peers is the case the line exists for: without it a firewalled
-	// machine sits at 0.0%% forever with no explanation.
-	if !strings.Contains(syncLine(info, 0), "0") {
-		t.Errorf("sync line omits the peer count: %q", syncLine(info, 0))
-	}
-}
-```
-
-Add to `node_test.go`'s imports:
-
-```go
-	chainjson "github.com/monetarium/monetarium-node/rpc/jsonrpc/types"
-```
-
-- [ ] **Step 2: Run the tests to verify they fail**
-
-Run: `go test -run 'TestSynced|TestSyncLine' -v .`
-Expected: FAIL — `undefined: synced`, `undefined: syncLine`.
-
-- [ ] **Step 3: Implement the gate**
+- [ ] **Step 1: Implement the gate**
 
 Add to `node.go`:
 
 ```go
-// synced reports whether the chain is far enough along to mine on.
-//
-// The test is the boolean, never blocks >= headers: on a clean machine both are
-// 0 before any header arrives, which reads as synced and mines at height 1.
-func synced(info *chainjson.GetBlockChainInfoResult) bool {
-	return !info.InitialBlockDownload
-}
-
-// syncLine renders one line of sync progress.
-//
-// The peer count is not decoration.  InitialBlockDownload is !chain.IsCurrent(),
-// and IsCurrent never becomes true without peers, so a machine that cannot
-// reach the network would otherwise sit at 0.0% forever with nothing to explain
-// why.
-func syncLine(info *chainjson.GetBlockChainInfoResult, peers int64) string {
-	return fmt.Sprintf("Syncing %5.1f%%  %d/%d blocks  %d peers",
-		info.VerificationProgress*100, info.Blocks, info.Headers, peers)
-}
-
 // WaitSynced blocks until the node has caught up with the network.  Mining does
 // not start before this returns.
 func (n *nodeProc) WaitSynced(ctx context.Context) error {
@@ -1406,16 +1274,25 @@ func (n *nodeProc) WaitSynced(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("unable to read the node's chain state: %w", err)
 		}
-		if synced(info) {
+
+		// The gate is the boolean, never blocks >= headers: on a clean machine
+		// both are 0 before any header arrives, which reads as synced and
+		// mines at height 1.
+		if !info.InitialBlockDownload {
 			mainLog.Infof("Synced at height %d.", info.Blocks)
 			return nil
 		}
 
+		// The peer count is not decoration.  InitialBlockDownload is
+		// !chain.IsCurrent(), and IsCurrent never becomes true without peers,
+		// so a machine that cannot reach the network would otherwise sit at
+		// 0.0%% forever with nothing to explain why.
 		peers, err := n.rpc.GetConnectionCount(ctx)
 		if err != nil {
 			peers = 0
 		}
-		mainLog.Info(syncLine(info, peers))
+		mainLog.Infof("Syncing %5.1f%%  %d/%d blocks  %d peers",
+			info.VerificationProgress*100, info.Blocks, info.Headers, peers)
 
 		select {
 		case <-ctx.Done():
@@ -1426,26 +1303,24 @@ func (n *nodeProc) WaitSynced(ctx context.Context) error {
 }
 ```
 
-Add to `node.go`'s imports:
+`chainjson` is not needed: `GetBlockChainInfo` returns the type and it is only
+used inline.
 
-```go
-	chainjson "github.com/monetarium/monetarium-node/rpc/jsonrpc/types"
-```
-
-- [ ] **Step 4: Run the tests to verify they pass**
-
-Run: `go test -run 'TestSynced|TestSyncLine' -v .`
-Expected: PASS.
-
-- [ ] **Step 5: Run the whole suite and the linter**
+- [ ] **Step 2: Run the whole suite and the linter**
 
 Run: `./run_tests.sh`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 3: Confirm the gate by hand**
+
+This needs a node, so it is the one check that cannot run here. It is folded
+into task 8 step 10 items 4 and 5: the sync line must advance with a non-zero
+peer count, and no device may report a hashrate before it completes.
+
+- [ ] **Step 4: Commit**
 
 ```bash
-git add node.go node_test.go
+git add node.go
 git commit -m "node: Refuse to mine before the chain has caught up."
 ```
 
@@ -1530,6 +1405,12 @@ func TestCoinbasePays(t *testing.T) {
 		name: "coinbase with no outputs",
 		blk:  block(),
 		want: false,
+	}, {
+		// The node renders script hex lower case today, but nothing in the
+		// API promises it, and a case-sensitive compare would read as theft.
+		name: "ours, upper case hex",
+		blk:  block("76A914AABBCCDDEEFF00112233445566778899AABBCCDD88AC"),
+		want: true,
 	}}
 
 	for _, test := range tests {
@@ -1540,14 +1421,6 @@ func TestCoinbasePays(t *testing.T) {
 	}
 }
 
-func TestCoinbasePaysIsCaseInsensitive(t *testing.T) {
-	const lower = "76a914aabbccddeeff00112233445566778899aabbccdd88ac"
-	const upper = "76A914AABBCCDDEEFF00112233445566778899AABBCCDD88AC"
-
-	if !coinbasePays(block(upper), lower) {
-		t.Error("hex case difference reported as a mismatch")
-	}
-}
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -1857,7 +1730,7 @@ func (m *Miner) expiryThread(ctx context.Context) {
 			if failures >= maxFailures {
 				minrLog.Criticalf("The node has not served work for %v; "+
 					"shutting down", time.Duration(maxFailures)*workExpiry)
-				m.shutdown()
+				m.cancel()
 			}
 			continue
 		}
@@ -1953,19 +1826,9 @@ The expiry thread needs a way to end the process. Add to the `Miner` struct:
 
 ```go
 	// cancel stops the miner's context, which is how a fatal condition
-	// discovered by a background thread ends the run.
+	// discovered by a background thread ends the run.  Run sets it before it
+	// starts any thread that reads it, so it is never nil where it is called.
 	cancel context.CancelFunc
-```
-
-Add the method:
-
-```go
-// shutdown ends the run from a background thread.
-func (m *Miner) shutdown() {
-	if m.cancel != nil {
-		m.cancel()
-	}
-}
 ```
 
 In `Run`, derive the cancellable context and start the thread:
@@ -2159,7 +2022,7 @@ block so the order in `monvarkMain` reads:
 2. version line
 3. profiling and CPU profile setup
 4. `signal.NotifyContext` and the shutdown goroutine
-5. `newDevices`
+5. building the devices
 6. the block above
 7. `NewMiner(ctx, devices, workDone, payoutAddr)`
 8. `RunMonitor`, `m.Run(ctx)`
@@ -2540,34 +2403,31 @@ here. On a machine that has never run monvark:
 
 ---
 
-## Self-review
+## Notes for the executor
 
-Checked after writing, against the spec.
+**`NewMiner` changes signature twice.** Task 1 gives it `devices` and
+`workDone`; task 5 adds `payoutAddr`. Task 5 states the final form and task 7
+calls it. If you are reading tasks out of order, task 5's is the one that ships.
 
-**Spec coverage.** §2.1 payee split → tasks 3 (argv) and 5 (proof). §2.2 pinned
-node asset → task 8. §2.3 unsigned Windows → task 8 steps 6 and 7. §2.4
-credentials in a file, identity on argv → task 3. §2.5 expiry → task 6. §2.6
-device ordering → task 1. §2.7 coexistence → task 3 steps 1 and 3. §3.1 startup
-sequence → tasks 1 and 7. §3.2 layout → tasks 2, 3. §3.3 first run → task 2.
-§3.4 node ownership → task 3. §3.5 sync gate → task 4. §3.6 work expiry →
-task 6. §3.7 payee → task 5. §3.8 flag surface → task 7. §3.9 status → task 7
-step 5. §3.10 packaging → task 8. §4 verification → the test steps in each task
-plus task 8 step 10. §5 work order → the task order, which follows it.
+**`onSoloWork` changes its last parameter** from `[]*Device` to `*Miner` in task
+6, because the expiry thread needs to know what the newest work was and nothing
+records it today. That step updates all three call sites together; they will not
+compile separately.
 
-**Type consistency.** `NewMiner` changes signature twice, in task 1 (devices,
-workDone) and task 5 (payoutAddr); task 5 states the final form and task 7 calls
-it. `onSoloWork` changes its last parameter from `[]*Device` to `*Miner` in task
-6, which updates all three call sites in the same step. `coinbasePays` takes a
-hex script string in both its test and its implementation.
-`chainjson` is the import alias used in `node.go`, `node_test.go`, `miner.go`
-and `miner_test.go` alike.
+**`checkPerms` lives in `payout.go`** (task 2) but is also called by
+`checkMondConf` in `node.go` (task 3). It is named for the check rather than for
+either file for that reason.
 
-**Known rough edge, deliberately left to the executor.**
-`TestValidatePayoutRejectsWrongNetwork` contains a hardcoded simnet address that
-may not decode on this chain. Task 2 step 7 says what to do about it and why
-loosening the test is the wrong repair.
+**Task 2's `TestValidatePayoutRejectsWrongNetwork` contains a hardcoded simnet
+address** that may not decode on this chain. Task 2 step 7 says to generate a
+real one rather than loosen the test: an address valid on both networks would
+assert nothing.
+
+**Two tasks ship no unit test**, and say so in their own text: task 1 is a
+reordering the compiler and the existing device tests already cover, and task
+4's gate is one negation plus a format string. Neither absence is an oversight.
 
 **Not covered here, and deliberately:** restart-on-crash, an external-node mode,
-multi-address payouts, and rig-manager monitoring APIs. All were ruled out in the
-predecessor spec §6; the stage 2 spec §6 records the external-node opt-in as
-considered-and-declined with the cost of adding it later.
+multi-address payouts, and rig-manager monitoring APIs. All were ruled out in
+the predecessor spec §6; the stage 2 spec §6 records the external-node opt-in as
+considered and declined.

@@ -509,19 +509,9 @@ Windows ships unsigned and documented (§2.3), and macOS is a development target
 (§3.10).
 
 **Considered and declined: an explicit `--rpcserver` opt-in** for attaching to a
-node the user names themselves. Everything wrong with auto-attachment (§2.7)
-comes from the *auto*: a user who supplies the server, the credentials and
-`--miningaddr` has asserted ownership, so the silent failure becomes their
-deliberate choice, and the post-hoc payee proof still stops mining on a
-mismatch. It is declined because the P2P fallback of §3.4 removes the blocker
-that motivated it, so building it now would be speculative, and because it
-restores four flags §3.8 deletes.
-
-Recorded rather than dropped because the cost of adding it later is known and
-small: an `if` around `nodeStart` in `main.go`, since `newSoloMiner` already
-reads `cfg.RPCServer`, `cfg.RPCCert`, `cfg.RPCUser` and `cfg.RPCPassword`, plus
-restoring those four flag tags and a startup warning that the payout is
-unverified until the first block. Nothing in this design forecloses it.
+node the user names themselves. The P2P fallback of §3.4 removes the blocker
+that motivated it, so building it now would be speculative, and it would restore
+four flags §3.8 deletes.
 
 ---
 
