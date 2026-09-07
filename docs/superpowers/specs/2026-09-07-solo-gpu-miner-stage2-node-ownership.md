@@ -583,3 +583,24 @@ merely unwise.
 each address with `net.SplitHostPort` and keeps the port it finds, substituting
 the default only when there is none — so `--listen=:0` reaches `net.Listen` as
 `:0`.
+
+---
+
+## 8. Errata
+
+Corrections found during implementation, dated 2026-09-07.
+
+**§3.6's "three consecutive failures is 45 minutes" is wrong.** The ticker
+that drives the poll is one minute, not `workExpiry`, so once work is stale
+`GetWork` is polled every minute and three consecutive failures land roughly
+17 minutes into the outage, not 45. The behaviour itself is right — 17 minutes
+is well past any transient — and the shutdown message was corrected to report
+only what the loop actually measures, rather than repeating the wrong figure.
+
+**§3.6's three-way table assumes `getwork` returns byte-identical data for an
+unchanged template. It does not.** The node's `handleGetWorkRequest` calls
+`UpdateBlockTime` before serializing on every call, so the timestamp word
+always differs between polls even when the template itself has not changed.
+The classification in the table is only implementable against the
+template-identifying prefix `data[:128]` — version, previous block, both
+merkle roots and bits — not the full 192 bytes.

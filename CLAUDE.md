@@ -54,8 +54,11 @@ GPU driver exists anywhere in the tree.
 
 ## Architecture
 
-`main.go` → `loadConfig()` (`config.go`, all flag parsing) → `NewMiner(ctx)`
-(`miner.go`) → `m.Run(ctx)`.
+`main.go` → `loadConfig()` (`config.go`, all flag parsing) → build `devices`
+→ `resolvePayout()` (`payout.go`) → `nodeStart()` + `WaitSynced()` (`node.go`)
+→ `NewMiner(ctx, devices, workDone, payoutAddr)` (`miner.go`) → `m.Run(ctx)`,
+which now returns an error. Benchmark mode (`-B`) skips `resolvePayout`,
+`nodeStart` and `WaitSynced` entirely.
 
 **Two work sources converge on one type.** `NewMiner` picks one based on
 config, and both produce a `*work.Work` handed to every device via
