@@ -87,7 +87,9 @@ func monvarkMain() error {
 		stop()
 	}()
 
-	m, err := NewMiner(ctx, devices, workDone)
+	// payoutAddr is wired in below once resolvePayout runs.
+	payoutAddr := ""
+	m, err := NewMiner(ctx, devices, workDone, payoutAddr)
 	if err != nil {
 		mainLog.Criticalf("Error initializing miner: %v", err)
 		return err

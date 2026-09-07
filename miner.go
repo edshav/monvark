@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,7 +18,9 @@ import (
 	"github.com/edshav/monvark/work"
 	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 	"github.com/monetarium/monetarium-node/crypto/blake256"
+	chainjson "github.com/monetarium/monetarium-node/rpc/jsonrpc/types"
 	"github.com/monetarium/monetarium-node/rpcclient"
+	"github.com/monetarium/monetarium-node/txscript/stdaddr"
 )
 
 type Miner struct {
@@ -31,6 +34,13 @@ type Miner struct {
 	wg       sync.WaitGroup
 
 	rpc *rpcclient.Client
+
+	// payoutAddr is the address block rewards are paid to, and payoutScript
+	// its payment script.  The assertion below compares the coinbase against
+	// the script; the address is what the user sees.
+	payoutAddr   string
+	payoutScript string
+	payeeChecked bool
 }
 
 // onSoloWork prepares the provided getwork-based work data, which might have
@@ -112,7 +122,7 @@ func newSoloMiner(ctx context.Context, devices []*Device) (*Miner, error) {
 	return m, nil
 }
 
-func NewMiner(ctx context.Context, devices []*Device, workDone chan []byte) (*Miner, error) {
+func NewMiner(ctx context.Context, devices []*Device, workDone chan []byte, payoutAddr string) (*Miner, error) {
 	var m *Miner
 	var err error
 	if cfg.Benchmark {
@@ -122,6 +132,16 @@ func NewMiner(ctx context.Context, devices []*Device, workDone chan []byte) (*Mi
 	}
 	if err != nil {
 		return nil, err
+	}
+
+	if payoutAddr != "" {
+		addr, err := stdaddr.DecodeAddress(payoutAddr, chainParams)
+		if err != nil {
+			return nil, err
+		}
+		_, script := addr.PaymentScript()
+		m.payoutAddr = payoutAddr
+		m.payoutScript = hex.EncodeToString(script)
 	}
 
 	m.workDone = workDone
@@ -174,10 +194,51 @@ func (m *Miner) workSubmitThread(ctx context.Context) {
 				continue
 			}
 			atomic.AddUint64(&m.validShares, 1)
-			minrLog.Infof("Submitted work successfully: block hash %v",
-				chainhash.Hash(blake256.Sum256(data[:180])))
+			hash := chainhash.Hash(blake256.Sum256(data[:180]))
+			minrLog.Infof("Submitted work successfully: block hash %v", hash)
+
+			if err := m.checkPayee(ctx, &hash); err != nil {
+				minrLog.Criticalf("%v", err)
+				return
+			}
 		}
 	}
+}
+
+// checkPayee reads back a block this miner submitted and asserts its coinbase
+// pays the user.  It runs once, on the first accepted block: this is the only
+// point in the system that covers where the money goes rather than whether the
+// hash is right.
+//
+// It is evidence and a bug detector, not a defence against a substituted node
+// binary -- a hostile node lies on every RPC it serves.  The archive's SHA256
+// is what covers that.
+func (m *Miner) checkPayee(ctx context.Context, hash *chainhash.Hash) error {
+	if m.payeeChecked || m.payoutScript == "" {
+		return nil
+	}
+
+	blk, err := m.rpc.GetBlockVerbose(ctx, hash, true)
+	if err != nil {
+		// A block we cannot read back is not evidence of theft, so warn rather
+		// than stopping, and try again on the next one.
+		minrLog.Warnf("Unable to read back block %v to verify the payee: %v",
+			hash, err)
+		return nil
+	}
+
+	if !coinbasePays(blk, m.payoutScript) {
+		return fmt.Errorf("block %v does not pay %s -- refusing to mine "+
+			"further.  The node monvark started was given this address on "+
+			"its own command line, so this should be impossible; check that "+
+			"the mond binary beside monvark is the one from the release "+
+			"archive", hash, m.payoutAddr)
+	}
+
+	m.payeeChecked = true
+	minrLog.Infof("Coinbase verified: block %d pays %s", blk.Height,
+		m.payoutAddr)
+	return nil
 }
 
 func (m *Miner) printStatsThread(ctx context.Context) {
@@ -232,6 +293,25 @@ func (m *Miner) Run(ctx context.Context) {
 	go m.printStatsThread(ctx)
 
 	m.wg.Wait()
+}
+
+// coinbasePays reports whether the coinbase of blk pays wantScript.
+//
+// The comparison is against the raw payment script rather than the address
+// string that also appears in the result: comparing scripts is the exact check
+// the design wanted, and it survives address-encoding variations that string
+// matching would not.  A coinbase carries the treasury and other outputs
+// alongside the miner's, so ours being one of several is the normal case.
+func coinbasePays(blk *chainjson.GetBlockVerboseResult, wantScript string) bool {
+	if len(blk.RawTx) == 0 {
+		return false
+	}
+	for _, out := range blk.RawTx[0].Vout {
+		if strings.EqualFold(out.ScriptPubKey.Hex, wantScript) {
+			return true
+		}
+	}
+	return false
 }
 
 // Status returns the miner's accepted, rejected and total share counts.
