@@ -118,6 +118,36 @@ func TestMondArgs(t *testing.T) {
 	if !slices.Contains(simnet, "--simnet") {
 		t.Errorf("args missing --simnet: %v", simnet)
 	}
+
+	// Mainnet has no DNS seed and no HTTP seeder, so without a bootstrap peer
+	// the node loads an empty peers.json and never finds anybody: it reports
+	// 0 peers forever rather than syncing.
+	for _, p := range mainnetBootstrap {
+		if !slices.Contains(args, "--addpeer="+p) {
+			t.Errorf("args missing --addpeer=%s: %v", p, args)
+		}
+	}
+
+	// A user-supplied list replaces the built-in one rather than adding to it,
+	// which is the only way out when a built-in address goes dark.
+	custom := mondArgs(&config{AddPeer: []string{"10.0.0.1:9508"}},
+		"/h/mond.conf", "/h/node", "Vs1", false)
+	if !slices.Contains(custom, "--addpeer=10.0.0.1:9508") {
+		t.Errorf("args missing the supplied peer: %v", custom)
+	}
+	for _, p := range mainnetBootstrap {
+		if slices.Contains(custom, "--addpeer="+p) {
+			t.Errorf("args still carry built-in peer %s: %v", p, custom)
+		}
+	}
+
+	// The built-in list is mainnet's.  Handing mainnet peers to a testnet node
+	// would just log failed handshakes against the wrong network magic.
+	for _, p := range mainnetBootstrap {
+		if slices.Contains(testnet, "--addpeer="+p) {
+			t.Errorf("testnet args carry mainnet peer %s: %v", p, testnet)
+		}
+	}
 }
 
 func TestMondPath(t *testing.T) {

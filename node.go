@@ -122,6 +122,17 @@ func checkMondConf(path string) error {
 	return nil
 }
 
+// mainnetBootstrap is how the node monvark starts finds the network at all.
+// Monetarium's chaincfg carries neither DNS seeds nor HTTP seeders on any
+// network -- DNSSeeds and seeders are both empty -- so a node started from a
+// freshly generated config loads 0 addresses out of an empty peers.json and
+// has no way to ever fill it.  It sits at 0 peers forever instead of syncing.
+var mainnetBootstrap = []string{
+	"176.113.164.216:9508",
+	"62.216.37.206:9508",
+	"134.249.62.43:9508",
+}
+
 // mondArgs builds the node's command line.  --generate is never passed: the
 // node's default is off, and a node with CPU mining enabled refuses getwork.
 func mondArgs(cfg *config, confPath, appData, addr string, p2pBusy bool) []string {
@@ -143,6 +154,19 @@ func mondArgs(cfg *config, confPath, appData, addr string, p2pBusy bool) []strin
 		args = append(args, "--testnet")
 	case cfg.SimNet:
 		args = append(args, "--simnet")
+	}
+
+	// --addpeer rather than --connect: these are a way in, not the whole peer
+	// set.  The address manager fills itself from them and the node goes on to
+	// find others, which --connect would forbid.  A user-supplied list
+	// replaces the built-in one outright, so an address that rots is something
+	// the user can route around without waiting for a new release.
+	peers := cfg.AddPeer
+	if len(peers) == 0 && !cfg.TestNet && !cfg.SimNet {
+		peers = mainnetBootstrap
+	}
+	for _, p := range peers {
+		args = append(args, "--addpeer="+p)
 	}
 	return args
 }
