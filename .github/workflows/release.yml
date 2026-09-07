@@ -1,0 +1,79 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+
+env:
+  # The node ships in the same archive as the miner.  Its asset is downloaded
+  # at a pinned tag and checked against a checksum recorded here, because
+  # upstream publishes no checksum file.  A changed asset fails this build
+  # rather than shipping silently.
+  NODE_TAG: v1.3.10
+  NODE_SHA_LINUX: 8f997fff261a98ec4c4980cb135675ca07b7cf8d96fdf9be21302da8ec514225
+  NODE_SHA_WINDOWS: b4a7f88c38f9eb8763a5b9130c37bb9cd5b94511eb81b8652de6beb07fa83d37
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e #v7.0.0
+        with:
+          # The go.mod floor rather than 'stable', so every shipped platform is
+          # built by the oldest toolchain the module claims to support.
+          go-version-file: 'go.mod'
+
+      - name: Cross-compile monvark
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          set -eu
+          mkdir -p dist/linux dist/windows
+          GOOS=linux   GOARCH=amd64 go build -trimpath -o dist/linux/monvark .
+          GOOS=windows GOARCH=amd64 go build -trimpath -o dist/windows/monvark.exe .
+
+      - name: Fetch and verify the node
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release download "$NODE_TAG" -R monetarium/monetarium-node \
+            -p monetarium-node-linux-amd64 \
+            -p monetarium-node-windows-amd64.exe -D nodedl
+          echo "$NODE_SHA_LINUX  nodedl/monetarium-node-linux-amd64" | sha256sum -c -
+          echo "$NODE_SHA_WINDOWS  nodedl/monetarium-node-windows-amd64.exe" | sha256sum -c -
+          install -m 0755 nodedl/monetarium-node-linux-amd64      dist/linux/mond
+          install -m 0755 nodedl/monetarium-node-windows-amd64.exe dist/windows/mond.exe
+
+      - name: Assemble the archives
+        run: |
+          set -eu
+          V="${GITHUB_REF_NAME}"
+          # tar.gz for Linux because .zip does not reliably preserve the
+          # execute bit, and zip for Windows because that is what it opens.
+          tar -C dist/linux   -czf "monvark-${V}-linux-amd64.tar.gz" monvark mond
+          (cd dist/windows && zip -q "../../monvark-${V}-windows-amd64.zip" monvark.exe mond.exe)
+          sha256sum monvark-${V}-*.tar.gz monvark-${V}-*.zip | tee SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          V="${GITHUB_REF_NAME}"
+          {
+            echo "Contains \`monvark\` and \`mond\`.  Unpack anywhere and run \`monvark\`."
+            echo
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+            echo
+            echo "The Windows build is unsigned; see the README for the SmartScreen prompt."
+          } > NOTES.md
+          gh release create "$V" --title "$V" --notes-file NOTES.md \
+            "monvark-${V}-linux-amd64.tar.gz" "monvark-${V}-windows-amd64.zip"

@@ -16,8 +16,8 @@ removed in this stage; see "Removed in this stage" below.
 rename, not a partial one — do not go looking for `gominer` remnants to clean
 up. Internal identifiers still keep their `dcr*` heritage where they come from
 imported Monetarium/Decred packages (`dcrutil`, `chainhash`, `blake256`,
-`rpcclient`, `chaincfg` — used in `config.go`, `device.go` and `miner.go`);
-that is not in scope to change.
+`rpcclient`, `chaincfg` — used in `config.go`, `device.go`, `miner.go`,
+`node.go` and `payout.go`); that is not in scope to change.
 
 **Branches and remote.** `origin` is `git@github.com:edshav/monvark.git`,
 matching the module path, and `main` is the only branch. The pristine upstream
@@ -150,12 +150,8 @@ outside this binary.
 Dependencies are `monetarium-node` submodules at `v1.3.10`. Monetarium tags all
 of its submodules together under one version with **no major-version path
 suffixes**, so the dcrd `/v2`, `/v3`, `/v4`, `/v8` elements are gone
-(`chaincfg/v3` → `chaincfg`, `rpcclient/v8` → `rpcclient`, …). Only three files
-import them: `config.go`, `device.go`, `miner.go`.
-
-Solo-mining defaults point at the node: RPC cert under the `monetarium`
-application data directory, ports **9509** mainnet / **19509** testnet /
-**19956** simnet.
+(`chaincfg/v3` → `chaincfg`, `rpcclient/v8` → `rpcclient`, …). Five files
+import them: `config.go`, `device.go`, `miner.go`, `node.go`, `payout.go`.
 
 `blake3pow` is **active since block 1** on Monetarium mainnet, and the block
 header is the same 180 bytes as Decred's — which is why this BLAKE3-only miner
@@ -164,6 +160,27 @@ works unchanged.
 **A node with `generate=1` refuses `getwork`** (`getwork polling is disallowed
 while CPU mining is enabled`). Solo mining requires disabling CPU mining on the
 node; `miningaddr` must stay, since the node needs it to build the coinbase.
+
+## Node ownership
+
+monvark starts and owns its own node; there is no mode for attaching to one it
+did not configure, because a `getwork` template pays the `miningaddr` of
+whichever node served it. `nodeStart` in `node.go` generates
+`~/.monvark/mond.conf` at 0600 with the credentials and the loopback RPC port it
+chose, and passes `--miningaddr` on the node's **command line**.
+
+**That split is load-bearing, not stylistic.** The node picks uniformly at
+random among its configured mining addresses
+(`bgblktmplgenerator.go:728`), and go-flags *appends* command line occurrences to
+config file entries rather than overriding them. An address that ever lands in
+both places therefore pays a random fraction of blocks elsewhere. `mond.conf`
+is checked for a `miningaddr` or `generate` key before being rewritten, and
+their presence is an error rather than something to silently repair.
+
+The default P2P port is left to whoever holds it: monvark test-binds it and
+passes `--listen=:0` only when it is busy, so a machine already running a node
+keeps working. Shutdown is the node's own `stop` RPC via `RawRequest`, not a
+signal — `os.Interrupt` cannot be delivered through `Process.Signal` on Windows.
 
 ## Measuring hashrate
 
@@ -189,19 +206,15 @@ speed, `device_test.go`'s GPU/host hash-agreement check. If a genuine rate
 comparison is ever needed, run the old and new binaries back-to-back on the
 same warmed-up (or same cold) device, never across sessions.
 
-## Outstanding at the end of this stage
+## Outstanding
 
-- **Stage 2 is not built.** First run and the payout-address question, node
-  ownership and supervision (generating and starting `mond`), the sync gate,
-  the payee assertion, work expiry, and the release archive are all future
-  work. Until stage 2 lands, a user configures `mond` by hand, and **nothing
-  in the system verifies who the coinbase pays.**
-- **`getblocktemplate` does not exist on `monetarium-node`.** The design
-  spec's payee-verification check (§3.7 step 3 / §4) assumed it and needs
-  redesigning before it can be built. The workable alternative recorded in
-  the stage 2 plan is `GetBlockVerbose(hash, true)` on a block this miner
-  actually submitted, reading `RawTx[0].Vout[].ScriptPubKey.Addresses`, plus
-  passing `--miningaddr` to `mond` on its own command line.
-- **`cl/loader_windows.go` has never been executed on Windows.** It is
-  verified today only by cross-compilation and `go vet`, never by an actual
-  run against a Windows OpenCL driver.
+- **`cl/loader_windows.go` has never been executed on Windows.** It is verified
+  today only by cross-compilation and `go vet`, never by an actual run against a
+  Windows OpenCL driver.
+- **The Windows build is unsigned.** No code-signing certificate is budgeted, so
+  SmartScreen and Defender treat it by category; the README documents the
+  workaround.
+- **`getblocktemplate` does not exist on `monetarium-node`.** The payee check
+  therefore reads a block back with `GetBlockVerbose` after submitting it,
+  rather than inspecting a template beforehand. It is evidence and a bug
+  detector, not a defence against a substituted `mond`.
