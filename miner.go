@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -28,6 +29,11 @@ type Miner struct {
 	// The following variables must only be used atomically.
 	validShares   uint64
 	invalidShares uint64
+
+	// fatal is set by a background thread that has ended the run for a reason
+	// the user must not mistake for a clean shutdown.  Run reports it so the
+	// process exits non-zero.
+	fatal uint32
 
 	started  uint32
 	devices  []*Device
@@ -112,9 +118,6 @@ func newSoloMiner(ctx context.Context, devices []*Device) (*Miner, error) {
 		User:         cfg.RPCUser,
 		Pass:         cfg.RPCPassword,
 		Certificates: certs,
-		Proxy:        cfg.Proxy,
-		ProxyUser:    cfg.ProxyUser,
-		ProxyPass:    cfg.ProxyPass,
 	}
 	rpc, err := rpcclient.New(connCfg, &ntfnHandlers)
 	if err != nil {
@@ -215,6 +218,7 @@ func (m *Miner) workSubmitThread(ctx context.Context) {
 				// Stopping the submit thread alone would leave every device
 				// hashing at full power for a payout we have just proved is
 				// not ours, so end the run.
+				atomic.StoreUint32(&m.fatal, 1)
 				m.cancel()
 				return
 			}
@@ -315,6 +319,7 @@ func (m *Miner) expiryThread(ctx context.Context) {
 				minrLog.Criticalf("The node has not served work for over %v "+
 					"and %d consecutive GetWork polls failed; shutting down",
 					workExpiry, maxFailures)
+				atomic.StoreUint32(&m.fatal, 1)
 				m.cancel()
 			}
 			continue
@@ -356,8 +361,8 @@ func (m *Miner) printStatsThread(ctx context.Context) {
 	for {
 		if !cfg.Benchmark {
 			valid, rejected, total := m.Status()
-			minrLog.Infof("Global stats: Accepted: %v, Rejected: %v, Total: %v",
-				valid, rejected, total)
+			minrLog.Infof("Global stats: Accepted: %v, Rejected: %v, "+
+				"Total: %v, Paying: %v", valid, rejected, total, m.payoutAddr)
 		}
 
 		for _, d := range m.devices {
@@ -372,7 +377,7 @@ func (m *Miner) printStatsThread(ctx context.Context) {
 	}
 }
 
-func (m *Miner) Run(ctx context.Context) {
+func (m *Miner) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	m.cancel = cancel
@@ -408,6 +413,11 @@ func (m *Miner) Run(ctx context.Context) {
 	go m.printStatsThread(ctx)
 
 	m.wg.Wait()
+
+	if atomic.LoadUint32(&m.fatal) != 0 {
+		return errors.New("mining stopped for the reason logged above")
+	}
+	return nil
 }
 
 // coinbasePays reports whether the coinbase of blk pays wantScript.

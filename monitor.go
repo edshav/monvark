@@ -14,6 +14,7 @@ type MinerStatus struct {
 	TotalShares   uint64 `json:"totalShares"`
 	Started       uint32 `json:"started"`
 	Uptime        uint32 `json:"uptime"`
+	PayoutAddress string `json:"payoutAddress,omitempty"`
 
 	Devices []*DeviceStatus `json:"devices"`
 }
@@ -55,6 +56,7 @@ func getMinerStatus(w http.ResponseWriter, _ *http.Request) {
 		ms.ValidShares = valid
 		ms.InvalidShares = invalid
 		ms.TotalShares = total
+		ms.PayoutAddress = m.payoutAddr
 	}
 
 	for _, d := range m.devices {

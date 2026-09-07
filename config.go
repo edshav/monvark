@@ -26,16 +26,10 @@ const (
 )
 
 var (
-	minerHomeDir          = dcrutil.AppDataDir("monvark", false)
-	nodeHomeDir           = dcrutil.AppDataDir("monetarium", false)
-	defaultConfigFile     = filepath.Join(minerHomeDir, defaultConfigFilename)
-	defaultRPCServer      = "localhost"
-	defaultRPCCertFile    = filepath.Join(nodeHomeDir, "rpc.cert")
-	defaultRPCPortMainNet = "9509"
-	defaultRPCPortTestNet = "19509"
-	defaultRPCPortSimNet  = "19956"
-	defaultAPIPort        = "3333"
-	defaultAutocalibrate  = 500
+	minerHomeDir         = dcrutil.AppDataDir("monvark", false)
+	defaultConfigFile    = filepath.Join(minerHomeDir, defaultConfigFilename)
+	defaultAPIPort       = "3333"
+	defaultAutocalibrate = 500
 
 	minIntensity = 8
 	maxIntensity = 31
@@ -58,14 +52,14 @@ type config struct {
 	// Status API options
 	APIListen string `long:"apilisten" description:"Interface/port to expose the miner status API on"`
 
-	// RPC connection options
-	RPCUser     string `short:"u" long:"rpcuser" description:"RPC username"`
-	RPCPassword string `short:"P" long:"rpcpass" default-mask:"-" description:"RPC password"`
-	RPCServer   string `short:"s" long:"rpcserver" description:"RPC server to connect to"`
-	RPCCert     string `short:"c" long:"rpccert" description:"RPC server certificate chain for validation"`
-	Proxy       string `long:"proxy" description:"Connect via SOCKS5 proxy (eg. 127.0.0.1:9050)"`
-	ProxyUser   string `long:"proxyuser" description:"Username for proxy server"`
-	ProxyPass   string `long:"proxypass" default-mask:"-" description:"Password for proxy server"`
+	// Connection details for the node monvark starts.  These are not flags:
+	// there is no mode for attaching to a node we did not configure, because a
+	// getwork template pays the miningaddr of whichever node served it.
+	// nodeStart fills them in with the port and credentials it chose.
+	RPCUser     string
+	RPCPassword string
+	RPCServer   string
+	RPCCert     string
 
 	Benchmark bool `short:"B" long:"benchmark" description:"Run in benchmark mode."`
 
@@ -125,20 +119,6 @@ func parseInts(name, s string) ([]int, error) {
 	return values, nil
 }
 
-// cleanAndExpandPath expands environement variables and leading ~ in the
-// passed path, cleans the result, and returns it.
-func cleanAndExpandPath(path string) string {
-	// Expand initial ~ to OS specific home directory.
-	if strings.HasPrefix(path, "~") {
-		homeDir := filepath.Dir(minerHomeDir)
-		path = strings.Replace(path, "~", homeDir, 1)
-	}
-
-	// NOTE: The os.ExpandEnv doesn't work with Windows-style %VARIABLE%,
-	// but they variables can still be expanded via POSIX-style $VARIABLE.
-	return filepath.Clean(os.ExpandEnv(path))
-}
-
 // loadConfig initializes and parses the config using a config file and command
 // line options.
 //
@@ -156,8 +136,6 @@ func loadConfig() (*config, []string, error) {
 	cfg := config{
 		ConfigFile: defaultConfigFile,
 		DebugLevel: defaultLogLevel,
-		RPCServer:  defaultRPCServer,
-		RPCCert:    defaultRPCCertFile,
 	}
 
 	// Create the home directory if it doesn't already exist.
@@ -333,24 +311,12 @@ func loadConfig() (*config, []string, error) {
 		cfg.APIListen = normalizeAddress(cfg.APIListen, defaultAPIPort)
 	}
 
-	// Handle environment variable expansion in the RPC certificate path.
-	cfg.RPCCert = cleanAndExpandPath(cfg.RPCCert)
-
-	var defaultRPCPort string
 	switch {
 	case cfg.TestNet:
-		defaultRPCPort = defaultRPCPortTestNet
 		chainParams = chaincfg.TestNet3Params()
 	case cfg.SimNet:
-		defaultRPCPort = defaultRPCPortSimNet
 		chainParams = chaincfg.SimNetParams()
-	default:
-		defaultRPCPort = defaultRPCPortMainNet
 	}
-
-	// Add default port to RPC server based on --testnet flag
-	// if needed.
-	cfg.RPCServer = normalizeAddress(cfg.RPCServer, defaultRPCPort)
 
 	// Warn about missing config file only after all other configuration is
 	// done.  This prevents the warning on help messages and invalid

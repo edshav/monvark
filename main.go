@@ -30,23 +30,6 @@ func monvarkMain() error {
 	mainLog.Infof("Version %s %s (Go version %s %s/%s)", Version, gpuLib,
 		runtime.Version(), runtime.GOOS, runtime.GOARCH)
 
-	// Build the devices first.  Everything after this point can take minutes,
-	// and a user whose driver is broken should not wait through it.  This is
-	// the full build rather than a cheap enumeration on purpose: getCLDevices
-	// only enumerates, while NewDevice creates the context and compiles
-	// blake3.cl, which is where a driver that enumerates perfectly still
-	// fails.  A device consumes no GPU time until SetWork feeds it.
-	workDone := make(chan []byte, 10)
-	devices, err := newMinerDevs(workDone)
-	if err != nil {
-		mainLog.Criticalf("Error initializing devices: %v", err)
-		return err
-	}
-	if len(devices) == 0 {
-		mainLog.Critical("No devices started")
-		return errors.New("no devices started")
-	}
-
 	// Enable http profiling server if requested.
 	if cfg.Profile != "" {
 		go func() {
@@ -87,8 +70,46 @@ func monvarkMain() error {
 		stop()
 	}()
 
-	// payoutAddr is wired in below once resolvePayout runs.
-	payoutAddr := ""
+	// Build the devices first.  Everything after this point can take minutes,
+	// and a user whose driver is broken should not wait through it.  This is
+	// the full build rather than a cheap enumeration on purpose: getCLDevices
+	// only enumerates, while NewDevice creates the context and compiles
+	// blake3.cl, which is where a driver that enumerates perfectly still
+	// fails.  A device consumes no GPU time until SetWork feeds it.
+	workDone := make(chan []byte, 10)
+	devices, err := newMinerDevs(workDone)
+	if err != nil {
+		mainLog.Criticalf("Error initializing devices: %v", err)
+		return err
+	}
+	if len(devices) == 0 {
+		mainLog.Critical("No devices started")
+		return errors.New("no devices started")
+	}
+
+	// Benchmark mode needs no node, no address and no chain: it is the only
+	// path that exercises the mining loop on its own.
+	var payoutAddr string
+	if !cfg.Benchmark {
+		payoutAddr, err = resolvePayout(cfg)
+		if err != nil {
+			mainLog.Criticalf("%v", err)
+			return err
+		}
+
+		node, err := nodeStart(ctx, cfg, payoutAddr)
+		if err != nil {
+			mainLog.Criticalf("Unable to start the node: %v", err)
+			return err
+		}
+		defer node.Stop()
+
+		if err := node.WaitSynced(ctx); err != nil {
+			mainLog.Criticalf("%v", err)
+			return err
+		}
+	}
+
 	m, err := NewMiner(ctx, devices, workDone, payoutAddr)
 	if err != nil {
 		mainLog.Criticalf("Error initializing miner: %v", err)
@@ -97,9 +118,7 @@ func monvarkMain() error {
 	if cfg.APIListen != "" {
 		go RunMonitor(m)
 	}
-	m.Run(ctx)
-
-	return nil
+	return m.Run(ctx)
 }
 
 func main() {
