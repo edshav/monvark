@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/decred/gominer/cl"
-	"github.com/decred/gominer/work"
+	"github.com/edshav/monvark/cl"
+	"github.com/edshav/monvark/work"
 )
 
 // TestDeviceHashAgreesWithHost runs the compiled kernel on every OpenCL device

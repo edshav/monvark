@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/decred/gominer/util"
-	"github.com/decred/gominer/work"
+	"github.com/edshav/monvark/util"
+	"github.com/edshav/monvark/work"
 	"github.com/monetarium/monetarium-node/chaincfg/chainhash"
 	"github.com/monetarium/monetarium-node/crypto/blake256"
 	"github.com/monetarium/monetarium-node/rpcclient"

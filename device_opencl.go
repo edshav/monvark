@@ -12,9 +12,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/decred/gominer/cl"
-	"github.com/decred/gominer/util"
-	"github.com/decred/gominer/work"
+	"github.com/edshav/monvark/cl"
+	"github.com/edshav/monvark/util"
+	"github.com/edshav/monvark/work"
 )
 
 // kernelSource is the OpenCL kernel, compiled into the binary.  --kernel used

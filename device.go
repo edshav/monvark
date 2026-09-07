@@ -10,9 +10,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/decred/gominer/blake3"
-	"github.com/decred/gominer/util"
-	"github.com/decred/gominer/work"
+	"github.com/edshav/monvark/blake3"
+	"github.com/edshav/monvark/util"
+	"github.com/edshav/monvark/work"
 	"github.com/monetarium/monetarium-node/blockchain/standalone"
 	"github.com/monetarium/monetarium-node/chaincfg"
 	"github.com/monetarium/monetarium-node/chaincfg/chainhash"

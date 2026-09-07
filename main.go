@@ -13,7 +13,7 @@ var (
 	cfg *config
 )
 
-func gominerMain() error {
+func monvarkMain() error {
 	// Load configuration and parse command line.  This function also
 	// initializes logging and configures it accordingly.
 	tcfg, _, err := loadConfig()
@@ -94,7 +94,7 @@ func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	// Work around defer not working after os.Exit()
-	if err := gominerMain(); err != nil {
+	if err := monvarkMain(); err != nil {
 		os.Exit(1)
 	}
 }

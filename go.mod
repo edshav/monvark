@@ -1,4 +1,4 @@
-module github.com/decred/gominer
+module github.com/edshav/monvark
 
 go 1.23
 

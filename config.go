@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/decred/gominer/cl"
+	"github.com/edshav/monvark/cl"
 	"github.com/decred/slog"
 	"github.com/jessevdk/go-flags"
 	"github.com/monetarium/monetarium-node/chaincfg"
@@ -22,14 +22,14 @@ import (
 )
 
 const (
-	defaultConfigFilename = "gominer.conf"
+	defaultConfigFilename = "monvark.conf"
 	defaultLogLevel       = "info"
 	defaultLogDirname     = "logs"
-	defaultLogFilename    = "gominer.log"
+	defaultLogFilename    = "monvark.log"
 )
 
 var (
-	minerHomeDir          = dcrutil.AppDataDir("gominer", false)
+	minerHomeDir          = dcrutil.AppDataDir("monvark", false)
 	nodeHomeDir           = dcrutil.AppDataDir("monetarium", false)
 	defaultConfigFile     = filepath.Join(minerHomeDir, defaultConfigFilename)
 	defaultRPCServer      = "localhost"
