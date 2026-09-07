@@ -118,3 +118,10 @@ curl http://localhost:3333/
   }]
 }
 ```
+
+## Credits
+
+`monvark` is a fork of [decred/gominer](https://github.com/decred/gominer),
+retargeted at Monetarium. It inherits gominer's GPL-3.0 license and its git
+history — the upstream fork point is the tag `upstream-fork`, so
+`git diff upstream-fork..main` is the Monetarium delta.
