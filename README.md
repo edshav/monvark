@@ -111,9 +111,8 @@ curl http://localhost:3333/
   "devices": [{
     "index": 0,
     "deviceName": "GeForce GT 750M",
-    "deviceType": "GPU",
     "hashRate": 110127366.53846154,
-    "hashRateFormatted": "110MH/s",
+    "hashRateFormatted": "110.13 Mh/s",
     "started": 1504453880
   }]
 }
