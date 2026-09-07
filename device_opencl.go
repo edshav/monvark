@@ -117,6 +117,10 @@ type Device struct {
 	allDiffOneShares uint64
 	validShares      uint64
 	invalidShares    uint64
+
+	// hashMismatches counts candidates whose host-recomputed hash did not end
+	// in a zero word, which means the host and the GPU disagree.
+	hashMismatches uint64
 }
 
 func getCLPlatforms() ([]cl.PlatformID, error) {

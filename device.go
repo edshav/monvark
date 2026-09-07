@@ -161,6 +161,21 @@ func (d *Device) foundCandidate(ts, nonce0, nonce1, nonce2 uint32) {
 	binary.LittleEndian.PutUint32(data[128+4*work.Nonce2Word:], nonce2)
 	hash := chainhash.Hash(blake3.FinalBlock(d.midstate, data[128:180]))
 
+	// The kernel applies no target of its own: it discards everything whose
+	// final 32-bit hash word is non-zero (blake3.cl, "if (v7 ^ v15) return;")
+	// and leaves the target comparison to the host.  So every candidate that
+	// reaches here must hash to a value ending in a zero word.  One that does
+	// not means the host and the GPU disagree about the hash -- a miscompiled
+	// kernel, a wrong midstate, or a byte-order slip -- rather than an unlucky
+	// nonce.
+	if binary.LittleEndian.Uint32(hash[28:]) != 0 {
+		minrLog.Errorf("DEV #%d: GPU and host disagree on the hash of a "+
+			"candidate: %v does not end in a zero word", d.index, hash)
+		d.hashMismatches++
+		d.invalidShares++
+		return
+	}
+
 	// Hashes that reach this logic and fail the minimal proof of
 	// work check are considered to be hardware errors.
 	hashNum := standalone.HashToBig(&hash)
