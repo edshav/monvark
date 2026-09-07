@@ -112,18 +112,9 @@ func newSoloMiner(ctx context.Context, devices []*Device) (*Miner, error) {
 	return m, nil
 }
 
-func NewMiner(ctx context.Context) (*Miner, error) {
-	workDone := make(chan []byte, 10)
-
-	devices, err := newMinerDevs(workDone)
-	if err != nil {
-		return nil, err
-	}
-	if len(devices) == 0 {
-		return nil, fmt.Errorf("no devices started")
-	}
-
+func NewMiner(ctx context.Context, devices []*Device, workDone chan []byte) (*Miner, error) {
 	var m *Miner
+	var err error
 	if cfg.Benchmark {
 		m = &Miner{devices: devices}
 	} else {

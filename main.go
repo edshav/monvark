@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -28,6 +29,23 @@ func monvarkMain() error {
 	// Show version at startup.
 	mainLog.Infof("Version %s %s (Go version %s %s/%s)", Version, gpuLib,
 		runtime.Version(), runtime.GOOS, runtime.GOARCH)
+
+	// Build the devices first.  Everything after this point can take minutes,
+	// and a user whose driver is broken should not wait through it.  This is
+	// the full build rather than a cheap enumeration on purpose: getCLDevices
+	// only enumerates, while NewDevice creates the context and compiles
+	// blake3.cl, which is where a driver that enumerates perfectly still
+	// fails.  A device consumes no GPU time until SetWork feeds it.
+	workDone := make(chan []byte, 10)
+	devices, err := newMinerDevs(workDone)
+	if err != nil {
+		mainLog.Criticalf("Error initializing devices: %v", err)
+		return err
+	}
+	if len(devices) == 0 {
+		mainLog.Critical("No devices started")
+		return errors.New("no devices started")
+	}
 
 	// Enable http profiling server if requested.
 	if cfg.Profile != "" {
@@ -69,7 +87,7 @@ func monvarkMain() error {
 		stop()
 	}()
 
-	m, err := NewMiner(ctx)
+	m, err := NewMiner(ctx, devices, workDone)
 	if err != nil {
 		mainLog.Criticalf("Error initializing miner: %v", err)
 		return err
