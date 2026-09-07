@@ -12,6 +12,7 @@ require (
 	github.com/monetarium/monetarium-node/crypto/blake256 v1.3.10
 	github.com/monetarium/monetarium-node/dcrutil v1.3.10
 	github.com/monetarium/monetarium-node/rpcclient v1.3.10
+	github.com/monetarium/monetarium-node/txscript v1.3.10
 	golang.org/x/sys v0.30.0
 	lukechampine.com/blake3 v1.4.1
 )
@@ -35,7 +36,6 @@ require (
 	github.com/monetarium/monetarium-node/dcrjson v1.3.10 // indirect
 	github.com/monetarium/monetarium-node/gcs v1.3.10 // indirect
 	github.com/monetarium/monetarium-node/rpc/jsonrpc/types v1.3.10 // indirect
-	github.com/monetarium/monetarium-node/txscript v1.3.10 // indirect
 	github.com/monetarium/monetarium-node/wire v1.3.10 // indirect
 	golang.org/x/crypto v0.33.0 // indirect
 )
