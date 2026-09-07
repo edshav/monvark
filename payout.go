@@ -1,0 +1,160 @@
+package main
+
+import (
+	"bufio"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"runtime"
+	"strings"
+
+	"github.com/monetarium/monetarium-node/chaincfg"
+	"github.com/monetarium/monetarium-node/txscript/stdaddr"
+)
+
+// payoutAddress reports which payout address to use.  effective is the value
+// after the command line has overridden the config file; fromFile is the config
+// file's own value, captured before that override.  needPrompt is true when
+// neither source supplied one.
+//
+// A command line address that disagrees with the file is an error naming the
+// file.  The file is never rewritten to match and never silently overwritten:
+// that is the install-versus-upgrade distinction, and getting it wrong is the
+// bug that ships when a user re-extracts the archive over an existing install.
+func payoutAddress(effective, fromFile, filePath string) (string, bool, error) {
+	if effective == "" {
+		return "", true, nil
+	}
+	if fromFile != "" && effective != fromFile {
+		return "", false, fmt.Errorf("the payout address on the command "+
+			"line (%s) disagrees with the one in %s (%s); remove one of "+
+			"them, this file is never overwritten", effective, filePath,
+			fromFile)
+	}
+	return effective, false, nil
+}
+
+// validatePayout reports whether addr is a valid address on params.  It is
+// called before anything is written, so a typo or a testnet address supplied on
+// mainnet is reported in the miner's own words rather than surfacing later as
+// the node exiting during a progress display.
+func validatePayout(addr string, params *chaincfg.Params) error {
+	if addr == "" {
+		return errors.New("no payout address")
+	}
+	if _, err := stdaddr.DecodeAddress(addr, params); err != nil {
+		return fmt.Errorf("%q is not a valid %s address: %w", addr,
+			params.Name, err)
+	}
+	return nil
+}
+
+// checkPerms fails when path is group- or world-writable.  Both files monvark
+// writes go through it: every field in monvark.conf parses back into the config
+// struct including the payout address, and mond.conf carries the node's
+// credentials -- so write access to either is write access to the payout.  A
+// file that does not exist yet is not an error: first run creates it.
+//
+// Windows is skipped because Go synthesizes the unix mode bits there, so the
+// check would reject files that are in fact fine.
+func checkPerms(path string) error {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	if perm := info.Mode().Perm(); perm&0077 != 0 {
+		return fmt.Errorf("%s is writable by others (mode %04o); "+
+			"run: chmod 600 %s", path, perm, path)
+	}
+	return nil
+}
+
+// appendMiningAddr appends the payout address to path, creating it 0600 if it
+// does not exist and preserving whatever is already there.
+func appendMiningAddr(path, addr string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "miningaddr=%s\n", addr)
+	return err
+}
+
+// promptPayout asks for an address on stdout and reads one from stdin.
+func promptPayout() (string, error) {
+	fmt.Fprint(os.Stdout, "\nNo payout address configured.\n"+
+		"Block rewards are paid to a Monetarium address you control.  Create\n"+
+		"one with monetarium-wallet and paste it below.  The wallet is not\n"+
+		"needed while mining and should not be installed on this machine;\n"+
+		"monvark never holds keys.\n\nPayout address: ")
+
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	// TrimSpace also removes the carriage return Windows terminals supply.
+	return strings.TrimSpace(line), nil
+}
+
+// isTerminal reports whether f is a character device, which is enough to tell a
+// terminal from the pipe or closed descriptor a service manager supplies.
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+// resolvePayout returns the address block rewards are paid to, asking the user
+// for one on first run.  Precedence is the command line, then the config file,
+// then the prompt.
+func resolvePayout(cfg *config) (string, error) {
+	if err := checkPerms(cfg.ConfigFile); err != nil {
+		return "", err
+	}
+
+	addr, needPrompt, err := payoutAddress(cfg.MiningAddr, cfg.fileMiningAddr,
+		cfg.ConfigFile)
+	if err != nil {
+		return "", err
+	}
+
+	if !needPrompt {
+		if err := validatePayout(addr, chainParams); err != nil {
+			return "", err
+		}
+		mainLog.Infof("Paying block rewards to %s", addr)
+		return addr, nil
+	}
+
+	// Only a terminal can answer a question.  Under systemd or Docker there is
+	// nobody to ask, so say what to do instead of blocking on a closed stdin.
+	if !isTerminal(os.Stdin) {
+		return "", fmt.Errorf("no payout address configured and stdin is not "+
+			"a terminal; pass --miningaddr, or add miningaddr= to %s",
+			cfg.ConfigFile)
+	}
+
+	addr, err = promptPayout()
+	if err != nil {
+		return "", err
+	}
+	// Validate before writing anything.
+	if err := validatePayout(addr, chainParams); err != nil {
+		return "", err
+	}
+	if err := appendMiningAddr(cfg.ConfigFile, addr); err != nil {
+		return "", err
+	}
+	mainLog.Infof("Payout address saved to %s", cfg.ConfigFile)
+	return addr, nil
+}

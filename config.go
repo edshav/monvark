@@ -80,6 +80,16 @@ type config struct {
 	IntensityInts     []int
 	WorkSize          string `short:"W" long:"worksize" description:"The explicitly declared sizes of the work to do per device (overrides intensity). Single global value or a comma separated list."`
 	WorkSizeInts      []uint32
+
+	// Mining options
+	MiningAddr string `long:"miningaddr" description:"Address that block rewards are paid to.  Asked for once on first run and saved to the config file"`
+	Mond       string `long:"mond" description:"Path to the mond binary, for installations where it does not sit beside monvark"`
+
+	// fileMiningAddr is MiningAddr as it appeared in the config file, captured
+	// before the command line is parsed a second time.  After that parse
+	// MiningAddr is the effective value and the file's own is unrecoverable,
+	// so a disagreement between the two could not otherwise be reported.
+	fileMiningAddr string
 }
 
 // normalizeAddress returns addr with the passed default port appended if
@@ -193,6 +203,10 @@ func loadConfig() (*config, []string, error) {
 		}
 		configFileError = err
 	}
+
+	// Capture the config file's own miningaddr before the command line
+	// overrides it, so a disagreement between the two can be reported.
+	cfg.fileMiningAddr = cfg.MiningAddr
 
 	// Parse command line options again to ensure they take precedence.
 	remainingArgs, err := parser.Parse()
