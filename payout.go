@@ -104,14 +104,27 @@ func promptPayout() (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
-// isTerminal reports whether f is a character device, which is enough to tell a
-// terminal from the pipe or closed descriptor a service manager supplies.
+// isTerminal reports whether f is a terminal we can ask a question on.
+//
+// A character device is not enough on its own: /dev/null is one too, and it is
+// exactly what systemd's default StandardInput=null and a docker run without
+// -i hand a process -- the very case this check exists to catch.  A pipe or a
+// redirected file is already excluded by the character-device test.
 func isTerminal(f *os.File) bool {
 	info, err := f.Stat()
 	if err != nil {
 		return false
 	}
-	return info.Mode()&os.ModeCharDevice != 0
+	if info.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	null, err := os.Stat(os.DevNull)
+	if err != nil {
+		// With nothing to compare against, fall back to the weaker test rather
+		// than refusing to prompt a user who does have a terminal.
+		return true
+	}
+	return !os.SameFile(info, null)
 }
 
 // resolvePayout returns the address block rewards are paid to, asking the user

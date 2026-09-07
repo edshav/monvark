@@ -87,6 +87,13 @@ func monvarkMain() error {
 		return errors.New("no devices started")
 	}
 
+	// newMinerDevs takes no context, so an interrupt during the kernel compile
+	// is only noticed once it returns.  Stop here rather than going on to
+	// prompt for an address the user no longer wants to give.
+	if ctx.Err() != nil {
+		return nil
+	}
+
 	// Benchmark mode needs no node, no address and no chain: it is the only
 	// path that exercises the mining loop on its own.
 	var payoutAddr string
@@ -99,12 +106,21 @@ func monvarkMain() error {
 
 		node, err := nodeStart(ctx, cfg, payoutAddr)
 		if err != nil {
+			// A cancelled context here means the user interrupted the start,
+			// not that the node is broken.  Exiting non-zero would make a
+			// deliberate stop look like a fault to a service manager.
+			if ctx.Err() != nil {
+				return nil
+			}
 			mainLog.Criticalf("Unable to start the node: %v", err)
 			return err
 		}
 		defer node.Stop()
 
 		if err := node.WaitSynced(ctx); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			mainLog.Criticalf("%v", err)
 			return err
 		}

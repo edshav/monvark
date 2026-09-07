@@ -125,6 +125,26 @@ func TestCheckPerms(t *testing.T) {
 	}
 }
 
+// TestIsTerminalRejectsDevNull covers the exact case isTerminal exists for:
+// systemd's default StandardInput=null and a plain `docker run` (no -i) both
+// hand a process /dev/null as stdin, which is a character device but not a
+// terminal a prompt can be answered on.
+func TestIsTerminalRejectsDevNull(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("NUL does not stat the same way /dev/null does")
+	}
+
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	if isTerminal(f) {
+		t.Fatal("/dev/null reported as a terminal")
+	}
+}
+
 func TestAppendMiningAddr(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "monvark.conf")
