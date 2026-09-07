@@ -1,8 +1,5 @@
 // Copyright (c) 2016-2023 The Decred developers.
 
-//go:build !cuda
-// +build !cuda
-
 package main
 
 import (

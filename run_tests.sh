@@ -12,7 +12,7 @@ set -e
 go version
 
 # Run tests.
-go test -tags opencl -v ./...
+go test -v ./...
 
 # Run linters.
 golangci-lint run

@@ -1,15 +1,11 @@
 // Copyright (c) 2016-2023 The Decred developers.
 
-//go:build opencl && !cuda && !opencladl
-// +build opencl,!cuda,!opencladl
-
 package main
 
 import (
-	"bytes"
 	"context"
+	_ "embed"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"sync"
@@ -20,6 +16,13 @@ import (
 	"github.com/decred/gominer/util"
 	"github.com/decred/gominer/work"
 )
+
+// kernelSource is the OpenCL kernel, compiled into the binary.  --kernel used
+// to point at this file on disk and defaulted to a bare relative path, so the
+// miner only ran from its own build directory.
+//
+//go:embed blake3.cl
+var kernelSource string
 
 // Return the GPU library in use.
 func gpuLib() string {
@@ -38,32 +41,6 @@ func appendBitfield(info, value cl.CL_bitfield, name string, str *string) {
 	if (info & value) != 0 {
 		*str += name
 	}
-}
-
-func loadProgramSource(filename string) ([][]byte, []cl.CL_size_t, error) {
-	var programBuffer [1][]byte
-	var programSize [1]cl.CL_size_t
-
-	// Read each program file and place content into buffer array.
-	programHandle, err := os.Open(filename)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer programHandle.Close()
-
-	buf := bytes.NewBuffer(nil)
-	_, err = io.Copy(buf, programHandle)
-	if err != nil {
-		return nil, nil, err
-	}
-	str := buf.String()
-	programFinal := []byte(str)
-
-	programSize[0] = cl.CL_size_t(len(programFinal))
-	programBuffer[0] = make([]byte, programSize[0])
-	copy(programBuffer[0], programFinal)
-
-	return programBuffer[:], programSize[:], nil
 }
 
 func clError(status cl.CL_int, f string) error {
@@ -219,15 +196,10 @@ func NewDevice(index int, order int, platformID cl.CL_platform_id, deviceID cl.C
 		return nil, clError(status, "CLCreateBuffer")
 	}
 
-	// Load kernel source.
-	progSrc, progSize, err := loadProgramSource(cfg.ClKernel)
-	if err != nil {
-		return nil, fmt.Errorf("could not load kernel source: %w", err)
-	}
-
-	// Create the program.
-	d.program = cl.CLCreateProgramWithSource(d.context, 1, progSrc,
-		progSize[:], &status)
+	// Create the program from the embedded kernel source.
+	progSrc := [][]byte{[]byte(kernelSource)}
+	progSize := []cl.CL_size_t{cl.CL_size_t(len(kernelSource))}
+	d.program = cl.CLCreateProgramWithSource(d.context, 1, progSrc, progSize, &status)
 	if status != cl.CL_SUCCESS {
 		return nil, clError(status, "CLCreateProgramWithSource")
 	}
@@ -238,7 +210,7 @@ func NewDevice(index int, order int, platformID cl.CL_platform_id, deviceID cl.C
 	status = cl.CLBuildProgram(d.program, 1, []cl.CL_device_id{deviceID},
 		[]byte(compilerOptions), nil, nil)
 	if status != cl.CL_SUCCESS {
-		err = clError(status, "CLBuildProgram")
+		err := clError(status, "CLBuildProgram")
 
 		// Something went wrong! Print what it is.
 		var logSize cl.CL_size_t

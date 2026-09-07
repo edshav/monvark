@@ -25,7 +25,6 @@ const (
 	defaultLogLevel       = "info"
 	defaultLogDirname     = "logs"
 	defaultLogFilename    = "gominer.log"
-	defaultClKernel       = "blake3.cl"
 )
 
 var (
@@ -54,7 +53,6 @@ type config struct {
 	ConfigFile string `short:"C" long:"configfile" description:"Path to configuration file"`
 	LogDir     string `long:"logdir" description:"Directory to log output."`
 	DebugLevel string `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical} -- You may also specify <subsystem>=<level>,<subsystem2>=<level>,... to set the log level for individual subsystems -- Use show to list available subsystems"`
-	ClKernel   string `short:"k" long:"kernel" description:"File with cl kernel to use"`
 
 	// Debugging options
 	Profile    string `long:"profile" description:"Enable HTTP profiling on given port -- NOTE port must be between 1024 and 65536"`
@@ -229,7 +227,6 @@ func loadConfig() (*config, []string, error) {
 		LogDir:     defaultLogDir,
 		RPCServer:  defaultRPCServer,
 		RPCCert:    defaultRPCCertFile,
-		ClKernel:   defaultClKernel,
 	}
 
 	// Create the home directory if it doesn't already exist.
