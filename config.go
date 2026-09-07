@@ -30,6 +30,7 @@ var (
 	defaultConfigFile    = filepath.Join(minerHomeDir, defaultConfigFilename)
 	defaultAPIPort       = "3333"
 	defaultAutocalibrate = 500
+	defaultDutyCycle     = 100
 
 	minIntensity = 8
 	maxIntensity = 31
@@ -74,6 +75,8 @@ type config struct {
 	IntensityInts     []int
 	WorkSize          string `short:"W" long:"worksize" description:"The explicitly declared sizes of the work to do per device (overrides intensity). Single global value or a comma separated list."`
 	WorkSizeInts      []uint32
+	DutyCycle         string `long:"dutycycle" description:"Percentage of the time each device hashes, 1-100. Below 100 the device idles between kernel launches, leaving it usable for other work. Single global value or a comma separated list."`
+	DutyCycleInts     []int
 
 	// Mining options
 	MiningAddr string   `long:"miningaddr" description:"Address that block rewards are paid to.  Asked for once on first run and saved to the config file"`
@@ -291,6 +294,27 @@ func loadConfig() (*config, []string, error) {
 		if cfg.WorkSizeInts[i]%256 != 0 {
 			err := fmt.Errorf("work size %v not a multiple of 256",
 				cfg.WorkSizeInts[i])
+			fmt.Fprintln(os.Stderr, err)
+			return nil, nil, err
+		}
+	}
+
+	cfg.DutyCycleInts = []int{defaultDutyCycle}
+	if len(cfg.DutyCycle) > 0 {
+		cfg.DutyCycleInts, err = parseInts("duty cycle", cfg.DutyCycle)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return nil, nil, err
+		}
+	}
+
+	for i := range cfg.DutyCycleInts {
+		// Zero is excluded rather than treated as "never hash": it is the
+		// value a device would idle forever at, and the way to not use a
+		// device is to leave it out of --devices.
+		if cfg.DutyCycleInts[i] < 1 || cfg.DutyCycleInts[i] > 100 {
+			err := fmt.Errorf("duty cycle %v not within range 1 to 100",
+				cfg.DutyCycleInts[i])
 			fmt.Fprintln(os.Stderr, err)
 			return nil, nil, err
 		}

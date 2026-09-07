@@ -70,13 +70,31 @@ config, and both produce a `*work.Work` handed to every device via
   `NotifyWork` subscription. Solutions go back via `GetWorkSubmit`.
 
 `device.go` holds the backend-independent half of a device (the `Run`
-wrapper, stats, host-side hash verification); `device_opencl.go` holds the
-`Device` struct itself and the `runDevice` loop.
+wrapper, stats, host-side hash verification, `idleFor`); `device_opencl.go`
+holds the `Device` struct itself and the `runDevice` loop.
 
-**The mining loop has no sleep.** `runDevice` is a bare `for` loop: enqueue
-kernel, wait, scan results, repeat. The GPU runs at 100% duty cycle always.
+**`--dutycycle` is the only throttle.** `runDevice` is otherwise a bare `for`
+loop — enqueue kernel, wait, scan results, repeat — and at the default duty
+cycle of 100 it still has no sleep at all. Below 100 it idles at the end of
+each iteration for `idleFor(elapsed, dutyCycle)`, computed from the launch time
+`runKernel` measured rather than from any configured size, so the throttle
+holds at any intensity and on any card.
+
+Two things about that placement are load-bearing. The idle sits *after* the
+candidates are handled, so a found block is submitted immediately whatever the
+throttle; and it is a `select` on `ctx.Done()`, not a `time.Sleep`, or Ctrl+C
+would wait it out on every device before monvark could stop its node over RPC.
+
 `--intensity` sets the work size (`2^i`), i.e. the length of one kernel
 launch — it does *not* throttle the device or reduce heat.
+
+**The default takes every device, not just the GPU.** `newMinerDevs`
+enumerates with `cl.DeviceTypeAll` and, with no `--devices`, enables all of
+them — the CPU and the integrated graphics included. On a machine someone is
+sitting at that can look like a hang: a GPU has no preemption, so a kernel
+queued on the display adapter stalls the compositor. The README documents
+`--devices` as the fix; changing the default would be a behaviour change for
+existing rigs, so raise it rather than quietly flipping it.
 
 ### Work data layout — the core domain fact
 

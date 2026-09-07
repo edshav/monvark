@@ -125,6 +125,21 @@ func (d *Device) updateCurrentWork(ctx context.Context) {
 	minrLog.Tracef("work data for work update: %x", d.work.Data)
 }
 
+// idleFor returns how long a device has to sit idle after a kernel launch that
+// took elapsed, to hold it at dutyCycle percent of full speed.  The mining loop
+// has no sleep of its own, so this is the only thing that keeps a device from
+// running flat out: at 50 the device idles for exactly as long as the launch
+// took, at 25 for three times as long.
+//
+// 100 -- the default -- is no idling at all, and so is a dutyCycle of zero or
+// less, which loadConfig rejects but a config built by hand can still carry.
+func idleFor(elapsed time.Duration, dutyCycle int) time.Duration {
+	if dutyCycle >= 100 || dutyCycle <= 0 {
+		return 0
+	}
+	return elapsed * time.Duration(100-dutyCycle) / time.Duration(dutyCycle)
+}
+
 func (d *Device) Run(ctx context.Context) {
 	err := d.runDevice(ctx)
 	if err != nil {

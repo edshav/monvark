@@ -88,3 +88,34 @@ func TestDeviceHashAgreesWithHost(t *testing.T) {
 	t.Logf("%d device(s), %d candidates, all agreeing with the host",
 		len(devices), candidates)
 }
+
+// TestIdleFor covers the throttle arithmetic that --dutycycle rests on.  It is
+// the one part of the mining loop that can be checked without a GPU, and a
+// wrong divisor here is invisible in a log: the miner just runs at the wrong
+// speed.
+func TestIdleFor(t *testing.T) {
+	const launch = 500 * time.Millisecond
+
+	tests := []struct {
+		name      string
+		elapsed   time.Duration
+		dutyCycle int
+		want      time.Duration
+	}{
+		{"full speed", launch, 100, 0},
+		{"half", launch, 50, launch},
+		{"quarter", launch, 25, 3 * launch},
+		{"four fifths", launch, 80, launch / 4},
+		{"floor", launch, 1, 99 * launch},
+		{"instant launch", 0, 50, 0},
+		{"out of range high", launch, 150, 0},
+		{"unset", launch, 0, 0},
+		{"negative", launch, -1, 0},
+	}
+	for _, test := range tests {
+		if got := idleFor(test.elapsed, test.dutyCycle); got != test.want {
+			t.Errorf("%s: idleFor(%v, %d) = %v, want %v", test.name,
+				test.elapsed, test.dutyCycle, got, test.want)
+		}
+	}
+}

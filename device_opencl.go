@@ -64,6 +64,10 @@ type Device struct {
 
 	workSize uint32
 
+	// dutyCycle is the percentage of the time this device hashes; the rest it
+	// idles.  100 is flat out.
+	dutyCycle int
+
 	// extraNonce is an additional nonce that is used to separate groups of
 	// devices into exclusive ranges to ensure multiple groups do not duplicate
 	// work.
@@ -222,6 +226,18 @@ func NewDevice(index int, order int, deviceID cl.DeviceID,
 
 	d.started = uint32(time.Now().Unix())
 
+	// The duty cycle takes the same per-device form as the settings below: one
+	// global value, or one entry per device.  An unset slice means the default
+	// rather than a panic, so a config assembled by hand -- a test's -- does
+	// not have to fill in every tuning knob.
+	d.dutyCycle = defaultDutyCycle
+	if len(cfg.DutyCycleInts) > 0 {
+		d.dutyCycle = cfg.DutyCycleInts[0]
+		if order < len(cfg.DutyCycleInts) {
+			d.dutyCycle = cfg.DutyCycleInts[order]
+		}
+	}
+
 	// Autocalibrate the desired work size for the kernel, or use one of the
 	// values passed explicitly by the use.
 	// The intensity or worksize must be set by the user.
@@ -270,7 +286,15 @@ func NewDevice(index int, order int, deviceID cl.DeviceID,
 }
 
 func (d *Device) runDevice(ctx context.Context) error {
-	minrLog.Infof("Started DEV #%d: %s", d.index, d.deviceName)
+	// Name the throttle when there is one.  A duty cycle that silently failed
+	// to apply -- a typo in the config key, say -- otherwise looks exactly like
+	// one that worked, since the hash rate is a cumulative average that takes
+	// minutes to mean anything.
+	throttle := ""
+	if d.dutyCycle < 100 {
+		throttle = fmt.Sprintf(" at a %d%% duty cycle", d.dutyCycle)
+	}
+	minrLog.Infof("Started DEV #%d: %s%s", d.index, d.deviceName, throttle)
 	outputData := make([]uint32, outputBufferSize)
 
 	// Initialize the nonces for the device such that each device in the same
@@ -327,6 +351,17 @@ func (d *Device) runDevice(ctx context.Context) error {
 
 		minrLog.Tracef("DEV #%d: Kernel execution to read time: %v", d.index,
 			elapsedTime)
+
+		// Idle out the rest of the duty cycle window, after the candidates
+		// have been dealt with rather than before: a found block goes to the
+		// node at once, whatever the throttle is set to.
+		if idle := idleFor(elapsedTime, d.dutyCycle); idle > 0 {
+			select {
+			case <-ctxDoneCh:
+				return nil
+			case <-time.After(idle):
+			}
+		}
 	}
 }
 

@@ -12,7 +12,7 @@ readout; use `nvidia-smi` (NVIDIA) or `rocm-smi` (AMD) for those.
 
 - **A GPU with a working OpenCL driver**, AMD or NVIDIA. monvark runs the card
   at a 100% duty cycle for as long as it is up, so don't plan on using it for
-  anything else.
+  anything else — or turn that down with `--dutycycle`, below.
 - **A Monetarium address to be paid to.** Create one with
   [monetarium-wallet](https://github.com/monetarium/monetarium-wallet) on some
   other machine — the wallet is not needed while mining and should not be
@@ -39,17 +39,17 @@ together**, because monvark looks for `mond` beside its own executable.
 ### Linux
 
 ```sh
-sha256sum monvark-v2.0.0-linux-amd64.tar.gz        # compare with the release notes
+sha256sum monvark-v2.1.0-linux-amd64.tar.gz        # compare with the release notes
 mkdir -p ~/monvark
-tar -C ~/monvark -xzf monvark-v2.0.0-linux-amd64.tar.gz
+tar -C ~/monvark -xzf monvark-v2.1.0-linux-amd64.tar.gz
 ~/monvark/monvark
 ```
 
 ### Windows
 
 ```powershell
-Get-FileHash .\monvark-v2.0.0-windows-amd64.zip -Algorithm SHA256
-Expand-Archive .\monvark-v2.0.0-windows-amd64.zip -DestinationPath C:\monvark
+Get-FileHash .\monvark-v2.1.0-windows-amd64.zip -Algorithm SHA256
+Expand-Archive .\monvark-v2.1.0-windows-amd64.zip -DestinationPath C:\monvark
 C:\monvark\monvark.exe
 ```
 
@@ -112,6 +112,49 @@ Once, on the first block you find, monvark reads the block back off the chain
 and confirms its coinbase paid you. Note that `CoinbaseMaturity` is 256 blocks,
 so a reward is not spendable straight away.
 
+### Don't hand it the whole machine
+
+**By default monvark mines on every OpenCL device it can find** — not just the
+graphics card. On a laptop or a desktop that usually means three: the CPU, the
+integrated graphics that draw your screen, and the discrete GPU. `./monvark -l`
+lists them exactly as monvark will use them:
+
+```
+DEV #0: Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz
+DEV #1: Intel(R) UHD Graphics 630
+DEV #2: AMD Radeon Pro 5300M Compute Engine
+```
+
+Run that as-is on a machine you are also sitting at and it can go unresponsive.
+A GPU has no preemptive scheduler: once a kernel is running it runs to the end,
+and every frame your desktop wants to draw waits behind it in the same queue.
+Put that on the adapter driving the display and the screen stops repainting —
+the machine looks frozen even though it is fine. Meanwhile the CPU device is
+taking every core, so there is little left to recover with.
+
+**On a machine you use, name the device you want.** Take the index of the
+discrete card from `-l`:
+
+```sh
+./monvark --devices=2
+```
+
+You give up very little: the discrete GPU does the overwhelming majority of the
+hashing anyway, and you get the CPU and the display back. Put `devices=2` in
+`monvark.conf` so you don't have to remember the flag.
+
+**If one card still runs too hot or too loud, throttle it**:
+
+```sh
+./monvark --devices=2 --dutycycle=50
+```
+
+The device then hashes half the time and idles the other half, at roughly half
+the hashrate and heat. See [Tuning](#tuning).
+
+**On a dedicated rig you want neither flag.** Nothing else is competing for the
+machine, and every device found is one more hashing.
+
 ## Checking your setup
 
 List the OpenCL devices monvark can see:
@@ -134,7 +177,8 @@ instantaneous one — give it five minutes before reading anything into it.
 ## Files and settings
 
 monvark keeps everything in one directory: `~/.monvark/` on Linux,
-`%LOCALAPPDATA%\Monvark` on Windows.
+`%LOCALAPPDATA%\Monvark` on Windows, and
+`~/Library/Application Support/Monvark/` on macOS.
 
 ```
 monvark.conf   your settings, including the payout address
@@ -157,12 +201,23 @@ and `./monvark -h` for everything.
 - `--autocalibrate` — used when neither of the above is set: monvark sizes the
   work to spend about this many milliseconds per kernel launch (default 500).
 - `--devices` — comma-separated device indices (from `-l`) to mine with. By
-  default every device found is used, all at once.
+  default every device found is used, all at once — see [Don't hand it the
+  whole machine](#dont-hand-it-the-whole-machine).
+- `--dutycycle` — the percentage of the time a device hashes, 1–100 (default
+  100). Below 100 it idles between kernel launches for as long as the arithmetic
+  needs: at 50 it idles exactly as long as each launch took, at 25 three times
+  as long. This is the only setting that actually throttles a device. A found
+  block is still submitted immediately, and the idle wait ends at once on
+  Ctrl+C. New work is only picked up once the idle window is over, so a very low
+  duty cycle means hashing a stale template for that much longer — at the
+  default 500 ms per launch, `--dutycycle=10` idles 4.5 s at a time.
 - `--opencl-lib` — full path to the OpenCL library, for installations the
   built-in search does not cover.
 
-Each of `--intensity`, `--worksize` and `--autocalibrate` takes either one
-value for every device or a comma-separated value per device.
+Each of `--intensity`, `--worksize`, `--autocalibrate` and `--dutycycle` takes
+either one value for every device or a comma-separated value per device — so
+`--dutycycle=25,100` throttles the first device hard and leaves the second
+alone.
 
 ### Status API
 
@@ -207,7 +262,7 @@ RUN apt-get update \
  && mkdir -p /etc/OpenCL/vendors \
  && echo libnvidia-opencl.so.1 > /etc/OpenCL/vendors/nvidia.icd
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ADD monvark-v2.0.0-linux-amd64.tar.gz /opt/monvark/
+ADD monvark-v2.1.0-linux-amd64.tar.gz /opt/monvark/
 ENTRYPOINT ["/opt/monvark/monvark"]
 ```
 
@@ -260,6 +315,11 @@ where the config and the chain end up. `Restart=on-failure` will not fight a
 deliberate stop: monvark exits 0 when it is interrupted.
 
 ## Troubleshooting
+
+**The machine froze, or the screen stopped redrawing, as soon as mining
+started.** monvark took every OpenCL device, including the one drawing your
+display. Restart with `--devices=` naming only the discrete card, and see
+[Don't hand it the whole machine](#dont-hand-it-the-whole-machine).
 
 **"No devices started", or the device fails while compiling the kernel.** The
 OpenCL driver is missing or broken — a card that shows up in `-l` can still
