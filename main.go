@@ -1,3 +1,4 @@
+// Command monvark is a BLAKE3 GPU miner for Monetarium.
 package main
 
 import (

@@ -50,7 +50,7 @@ func RunMonitor(tm *Miner) {
 	}
 }
 
-func getMinerStatus(w http.ResponseWriter, req *http.Request) {
+func getMinerStatus(w http.ResponseWriter, _ *http.Request) {
 	ms := &MinerStatus{
 		Started: m.started,
 		Uptime:  uint32(time.Now().Unix()) - m.started,

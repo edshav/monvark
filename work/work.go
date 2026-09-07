@@ -1,5 +1,7 @@
 // Copyright (c) 2016 The Decred developers.
 
+// Package work defines the mining work item shared between work sources and
+// devices.
 package work
 
 import (

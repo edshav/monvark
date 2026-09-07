@@ -240,10 +240,7 @@ func NewDevice(index int, order int, platformID cl.PlatformID, deviceID cl.Devic
 	// Autocalibrate the desired work size for the kernel, or use one of the
 	// values passed explicitly by the use.
 	// The intensity or worksize must be set by the user.
-	userSetWorkSize := false
-	if len(cfg.IntensityInts) > 0 || len(cfg.WorkSizeInts) > 0 {
-		userSetWorkSize = true
-	}
+	userSetWorkSize := len(cfg.IntensityInts) > 0 || len(cfg.WorkSizeInts) > 0
 
 	var globalWorkSize uint32
 	if !userSetWorkSize {

@@ -26,21 +26,31 @@ import (
 // Opaque handles.  They are distinct types so that, say, a context cannot be
 // passed where a queue is wanted.
 type (
+	// PlatformID identifies an OpenCL platform.
 	PlatformID uintptr
-	DeviceID   uintptr
-	Context    uintptr
-	Queue      uintptr
-	Mem        uintptr
-	Program    uintptr
-	Kernel     uintptr
+	// DeviceID identifies an OpenCL device.
+	DeviceID uintptr
+	// Context identifies an OpenCL context.
+	Context uintptr
+	// Queue identifies an OpenCL command queue.
+	Queue uintptr
+	// Mem identifies an OpenCL memory object.
+	Mem uintptr
+	// Program identifies an OpenCL program.
+	Program uintptr
+	// Kernel identifies an OpenCL kernel.
+	Kernel uintptr
 )
 
-// Parameter types, sized to match the C types they stand for: cl_bitfield is 64
-// bits and cl_uint is 32.
+// Parameter types, sized to match the C types they stand for: cl_bitfield is
+// 64 bits and cl_uint is 32.
 type (
+	// DeviceType is a bitfield of OpenCL device kinds (cl_device_type).
 	DeviceType uint64
+	// DeviceInfo names a device query parameter (cl_device_info).
 	DeviceInfo uint32
-	MemFlags   uint64
+	// MemFlags is a bitfield of OpenCL memory allocation flags (cl_mem_flags).
+	MemFlags uint64
 )
 
 // Statuses returned by the entry points below.  Only the ones with call sites

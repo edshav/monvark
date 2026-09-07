@@ -1,5 +1,6 @@
 // Copyright (c) 2016-2023 The Decred developers.
 
+// Package util holds miscellaneous helper functions shared across monvark.
 package util
 
 import (
@@ -70,9 +71,9 @@ func DiffToTarget(diff float64, powLimit *big.Int) (*big.Int, error) {
 		diff = math.Floor(diff)
 	}
 	divisor := new(big.Int).SetInt64(int64(diff))
-	max := powLimit
+	maxTarget := powLimit
 	target := new(big.Int)
-	target.Div(max, divisor)
+	target.Div(maxTarget, divisor)
 
 	return target, nil
 }

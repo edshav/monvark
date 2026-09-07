@@ -14,8 +14,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/edshav/monvark/cl"
 	"github.com/decred/slog"
+	"github.com/edshav/monvark/cl"
 	"github.com/jessevdk/go-flags"
 	"github.com/monetarium/monetarium-node/chaincfg"
 	"github.com/monetarium/monetarium-node/dcrutil"
@@ -153,7 +153,7 @@ func parseAndSetDebugLevels(debugLevel string) error {
 	if !strings.Contains(debugLevel, ",") && !strings.Contains(debugLevel, "=") {
 		// Validate debug log level.
 		if !validLogLevel(debugLevel) {
-			str := "The specified debug level [%v] is invalid"
+			str := "the specified debug level [%v] is invalid"
 			return fmt.Errorf(str, debugLevel)
 		}
 
@@ -167,7 +167,7 @@ func parseAndSetDebugLevels(debugLevel string) error {
 	// issues and update the log levels accordingly.
 	for _, logLevelPair := range strings.Split(debugLevel, ",") {
 		if !strings.Contains(logLevelPair, "=") {
-			str := "The specified debug level contains an invalid " +
+			str := "the specified debug level contains an invalid " +
 				"subsystem/level pair [%v]"
 			return fmt.Errorf(str, logLevelPair)
 		}
@@ -178,14 +178,14 @@ func parseAndSetDebugLevels(debugLevel string) error {
 
 		// Validate subsystem.
 		if _, exists := subsystemLoggers[subsysID]; !exists {
-			str := "The specified subsystem [%v] is invalid -- " +
-				"supported subsytems %v"
+			str := "the specified subsystem [%v] is invalid -- " +
+				"supported subsystems %v"
 			return fmt.Errorf(str, subsysID, supportedSubsystems())
 		}
 
 		// Validate log level.
 		if !validLogLevel(logLevel) {
-			str := "The specified debug level [%v] is invalid"
+			str := "the specified debug level [%v] is invalid"
 			return fmt.Errorf(str, logLevel)
 		}
 
