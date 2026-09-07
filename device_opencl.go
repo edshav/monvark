@@ -30,26 +30,41 @@ func gpuLib() string {
 }
 
 const (
-	outputBufferSize = cl.CL_size_t(64)
+	outputBufferSize = uint64(64)
 	localWorksize    = 64
-	uint32Size       = cl.CL_size_t(unsafe.Sizeof(cl.CL_uint(0)))
+	uint32Size       = uint64(unsafe.Sizeof(uint32(0)))
 )
 
-var zeroSlice = []cl.CL_uint{cl.CL_uint(0)}
+var zeroSlice = []uint32{0}
 
-func appendBitfield(info, value cl.CL_bitfield, name string, str *string) {
-	if (info & value) != 0 {
-		*str += name
-	}
+func clError(status int32, f string) error {
+	return fmt.Errorf("%s returned error %s (%d)", f, cl.ErrorName(status), status)
 }
 
-func clError(status cl.CL_int, f string) error {
-	if -status < 0 || int(-status) > len(cl.ERROR_CODES_STRINGS) {
-		return fmt.Errorf("returned unknown error")
+// deviceName returns a device's CL_DEVICE_NAME.
+func deviceName(id cl.DeviceID) string {
+	name, status := cl.DeviceInfoString(id, cl.DeviceName)
+	if status != cl.Success {
+		return fmt.Sprintf("<unknown: %v>", clError(status, "clGetDeviceInfo"))
+	}
+	return name
+}
+
+// deviceTypeString renders a device's CL_DEVICE_TYPE as "CPU", "GPU" or both.
+func deviceTypeString(id cl.DeviceID) string {
+	value, status := cl.DeviceInfoUint64(id, cl.DeviceTypeParam)
+	if status != cl.Success {
+		return fmt.Sprintf("<unknown: %v>", clError(status, "clGetDeviceInfo"))
 	}
 
-	return fmt.Errorf("%s returned error %s (%d)", f,
-		cl.ERROR_CODES_STRINGS[-status], status)
+	var s string
+	if value&uint64(cl.DeviceTypeCPU) != 0 {
+		s += DeviceTypeCPU
+	}
+	if value&uint64(cl.DeviceTypeGPU) != 0 {
+		s += DeviceTypeGPU
+	}
+	return s
 }
 
 type Device struct {
@@ -57,15 +72,15 @@ type Device struct {
 	index int
 
 	// Items for OpenCL device
-	platformID   cl.CL_platform_id
-	deviceID     cl.CL_device_id
+	platformID   cl.PlatformID
+	deviceID     cl.DeviceID
 	deviceName   string
 	deviceType   string
-	context      cl.CL_context
-	queue        cl.CL_command_queue
-	outputBuffer cl.CL_mem
-	program      cl.CL_program
-	kernel       cl.CL_kernel
+	context      cl.Context
+	queue        cl.Queue
+	outputBuffer cl.Mem
+	program      cl.Program
+	kernel       cl.Kernel
 
 	workSize uint32
 
@@ -104,36 +119,34 @@ type Device struct {
 	invalidShares    uint64
 }
 
-func getCLPlatforms() ([]cl.CL_platform_id, error) {
-	var numPlatforms cl.CL_uint
-	status := cl.CLGetPlatformIDs(0, nil, &numPlatforms)
-	if status != cl.CL_SUCCESS {
-		return nil, clError(status, "CLGetPlatformIDs")
+func getCLPlatforms() ([]cl.PlatformID, error) {
+	var numPlatforms uint32
+	if status := cl.GetPlatformIDs(0, nil, &numPlatforms); status != cl.Success {
+		return nil, clError(status, "clGetPlatformIDs")
 	}
-	platforms := make([]cl.CL_platform_id, numPlatforms)
-	status = cl.CLGetPlatformIDs(numPlatforms, platforms, nil)
-	if status != cl.CL_SUCCESS {
-		return nil, clError(status, "CLGetPlatformIDs")
+
+	platforms := make([]cl.PlatformID, numPlatforms)
+	if status := cl.GetPlatformIDs(numPlatforms, platforms, nil); status != cl.Success {
+		return nil, clError(status, "clGetPlatformIDs")
 	}
 	return platforms, nil
 }
 
 // getCLDevices returns the list of devices for the given platform.
-func getCLDevices(platform cl.CL_platform_id) ([]cl.CL_device_id, error) {
-	var numDevices cl.CL_uint
-	status := cl.CLGetDeviceIDs(platform, cl.CL_DEVICE_TYPE_ALL, 0, nil,
-		&numDevices)
-	if status != cl.CL_SUCCESS && status != cl.CL_DEVICE_NOT_FOUND {
-		return nil, clError(status, "CLGetDeviceIDs")
+func getCLDevices(platform cl.PlatformID) ([]cl.DeviceID, error) {
+	var numDevices uint32
+	status := cl.GetDeviceIDs(platform, cl.DeviceTypeAll, 0, nil, &numDevices)
+	if status != cl.Success && status != cl.DeviceNotFound {
+		return nil, clError(status, "clGetDeviceIDs")
 	}
 	if numDevices == 0 {
 		return nil, nil
 	}
-	devices := make([]cl.CL_device_id, numDevices)
-	status = cl.CLGetDeviceIDs(platform, cl.CL_DEVICE_TYPE_ALL, numDevices,
-		devices, nil)
-	if status != cl.CL_SUCCESS {
-		return nil, clError(status, "CLGetDeviceIDs")
+
+	devices := make([]cl.DeviceID, numDevices)
+	status = cl.GetDeviceIDs(platform, cl.DeviceTypeAll, numDevices, devices, nil)
+	if status != cl.Success {
+		return nil, clError(status, "clGetDeviceIDs")
 	}
 	return devices, nil
 }
@@ -155,87 +168,67 @@ func ListDevices() {
 			os.Exit(1)
 		}
 		for _, deviceID := range deviceIDs {
-			fmt.Printf("DEV #%d: %s\n", deviceListIndex, getDeviceInfo(deviceID, cl.CL_DEVICE_NAME, "CL_DEVICE_NAME"))
+			fmt.Printf("DEV #%d: %s\n", deviceListIndex, deviceName(deviceID))
 			deviceListIndex++
 		}
 
 	}
 }
 
-func NewDevice(index int, order int, platformID cl.CL_platform_id, deviceID cl.CL_device_id,
+func NewDevice(index int, order int, platformID cl.PlatformID, deviceID cl.DeviceID,
 	workDone chan []byte) (*Device, error) {
 	d := &Device{
 		index:      index,
 		platformID: platformID,
 		deviceID:   deviceID,
-		deviceName: getDeviceInfo(deviceID, cl.CL_DEVICE_NAME, "CL_DEVICE_NAME"),
-		deviceType: getDeviceInfo(deviceID, cl.CL_DEVICE_TYPE, "CL_DEVICE_TYPE"),
+		deviceName: deviceName(deviceID),
+		deviceType: deviceTypeString(deviceID),
 		newWork:    make(chan *work.Work, 5),
 		workDone:   workDone,
 	}
 
-	var status cl.CL_int
+	var status int32
 
 	// Create the CL context.
-	d.context = cl.CLCreateContext(nil, 1, []cl.CL_device_id{deviceID},
-		nil, nil, &status)
-	if status != cl.CL_SUCCESS {
-		return nil, clError(status, "CLCreateContext")
+	d.context = cl.CreateContext(nil, 1, []cl.DeviceID{deviceID}, 0, 0, &status)
+	if status != cl.Success {
+		return nil, clError(status, "clCreateContext")
 	}
 
 	// Create the command queue.
-	d.queue = cl.CLCreateCommandQueue(d.context, deviceID, 0, &status)
-	if status != cl.CL_SUCCESS {
-		return nil, clError(status, "CLCreateCommandQueue")
+	d.queue = cl.CreateCommandQueue(d.context, deviceID, 0, &status)
+	if status != cl.Success {
+		return nil, clError(status, "clCreateCommandQueue")
 	}
 
 	// Create the output buffer.
-	d.outputBuffer = cl.CLCreateBuffer(d.context, cl.CL_MEM_READ_WRITE,
+	d.outputBuffer = cl.CreateBuffer(d.context, cl.MemReadWrite,
 		uint32Size*outputBufferSize, nil, &status)
-	if status != cl.CL_SUCCESS {
-		return nil, clError(status, "CLCreateBuffer")
+	if status != cl.Success {
+		return nil, clError(status, "clCreateBuffer")
 	}
 
 	// Create the program from the embedded kernel source.
-	progSrc := [][]byte{[]byte(kernelSource)}
-	progSize := []cl.CL_size_t{cl.CL_size_t(len(kernelSource))}
-	d.program = cl.CLCreateProgramWithSource(d.context, 1, progSrc, progSize, &status)
-	if status != cl.CL_SUCCESS {
-		return nil, clError(status, "CLCreateProgramWithSource")
+	d.program = cl.CreateProgramWithSource(d.context, kernelSource, &status)
+	if status != cl.Success {
+		return nil, clError(status, "clCreateProgramWithSource")
 	}
 
 	// Build the program for the device.
-	compilerOptions := ""
-	compilerOptions += fmt.Sprintf(" -D WORKSIZE=%d", localWorksize)
-	status = cl.CLBuildProgram(d.program, 1, []cl.CL_device_id{deviceID},
-		[]byte(compilerOptions), nil, nil)
-	if status != cl.CL_SUCCESS {
-		err := clError(status, "CLBuildProgram")
-
-		// Something went wrong! Print what it is.
-		var logSize cl.CL_size_t
-		status = cl.CLGetProgramBuildInfo(d.program, deviceID,
-			cl.CL_PROGRAM_BUILD_LOG, 0, nil, &logSize)
-		if status != cl.CL_SUCCESS {
-			minrLog.Errorf("Could not obtain compilation error log: %v",
-				clError(status, "CLGetProgramBuildInfo"))
+	options := fmt.Sprintf("-D WORKSIZE=%d", localWorksize)
+	status = cl.BuildProgram(d.program, 1, []cl.DeviceID{deviceID}, options, 0, 0)
+	if status != cl.Success {
+		err := clError(status, "clBuildProgram")
+		if buildLog, s := cl.ProgramBuildLog(d.program, deviceID); s == cl.Success {
+			minrLog.Errorf("Kernel build log:\n%s", buildLog)
 		}
-		var programLog interface{}
-		status = cl.CLGetProgramBuildInfo(d.program, deviceID,
-			cl.CL_PROGRAM_BUILD_LOG, logSize, &programLog, nil)
-		if status != cl.CL_SUCCESS {
-			minrLog.Errorf("Could not obtain compilation error log: %v",
-				clError(status, "CLGetProgramBuildInfo"))
-		}
-		minrLog.Errorf("%s\n", programLog)
-
 		return nil, err
 	}
 
 	// Create the kernel.
-	d.kernel = cl.CLCreateKernel(d.program, []byte("search"), &status)
-	if status != cl.CL_SUCCESS {
-		return nil, clError(status, "CLCreateKernel")
+	d.kernel = cl.CreateKernel(d.program, "search", &status)
+	if status != cl.Success {
+		return nil, clError(status, "clCreateKernel")
 	}
 
 	d.started = uint32(time.Now().Unix())
@@ -314,7 +307,7 @@ func (d *Device) runDevice(ctx context.Context) error {
 		return err
 	}
 
-	var status cl.CL_int
+	var status int32
 	ctxDoneCh := ctx.Done()
 	for {
 		d.updateCurrentWork(ctx)
@@ -336,20 +329,19 @@ func (d *Device) runDevice(ctx context.Context) error {
 
 		// arg 0: pointer to the buffer
 		obuf := d.outputBuffer
-		status = cl.CLSetKernelArg(d.kernel, 0,
-			cl.CL_size_t(unsafe.Sizeof(obuf)),
+		status = cl.SetKernelArg(d.kernel, 0, uint64(unsafe.Sizeof(obuf)),
 			unsafe.Pointer(&obuf))
-		if status != cl.CL_SUCCESS {
-			return clError(status, "CLSetKernelArg")
+		if status != cl.Success {
+			return clError(status, "clSetKernelArg")
 		}
 
 		// args 1..8: midstate
 		for i := 0; i < 8; i++ {
 			ms := d.midstate[i]
-			status = cl.CLSetKernelArg(d.kernel, cl.CL_uint(i+1),
-				uint32Size, unsafe.Pointer(&ms))
-			if status != cl.CL_SUCCESS {
-				return clError(status, "CLSetKernelArg")
+			status = cl.SetKernelArg(d.kernel, uint32(i+1), uint32Size,
+				unsafe.Pointer(&ms))
+			if status != cl.Success {
+				return clError(status, "clSetKernelArg")
 			}
 		}
 
@@ -360,40 +352,34 @@ func (d *Device) runDevice(ctx context.Context) error {
 				i2++
 			}
 			lb := d.lastBlock[i2]
-			status = cl.CLSetKernelArg(d.kernel, cl.CL_uint(i+9),
-				uint32Size, unsafe.Pointer(&lb))
-			if status != cl.CL_SUCCESS {
-				return clError(status, "CLSetKernelArg")
+			status = cl.SetKernelArg(d.kernel, uint32(i+9), uint32Size,
+				unsafe.Pointer(&lb))
+			if status != cl.Success {
+				return clError(status, "clSetKernelArg")
 			}
 			i2++
 		}
 
 		// Clear the found count from the buffer
-		status = cl.CLEnqueueWriteBuffer(d.queue, d.outputBuffer,
-			cl.CL_FALSE, 0, uint32Size, unsafe.Pointer(&zeroSlice[0]),
-			0, nil, nil)
-		if status != cl.CL_SUCCESS {
-			return clError(status, "CLEnqueueWriteBuffer")
+		status = cl.EnqueueWriteBuffer(d.queue, d.outputBuffer, false, 0,
+			uint32Size, unsafe.Pointer(&zeroSlice[0]))
+		if status != cl.Success {
+			return clError(status, "clEnqueueWriteBuffer")
 		}
 
 		// Execute the kernel and follow its execution time.
 		currentTime := time.Now()
-		var globalWorkSize [1]cl.CL_size_t
-		globalWorkSize[0] = cl.CL_size_t(d.workSize)
-		var localWorkSize [1]cl.CL_size_t
-		localWorkSize[0] = localWorksize
-		status = cl.CLEnqueueNDRangeKernel(d.queue, d.kernel, 1, nil,
-			globalWorkSize[:], localWorkSize[:], 0, nil, nil)
-		if status != cl.CL_SUCCESS {
-			return clError(status, "CLEnqueueNDRangeKernel")
+		status = cl.EnqueueNDRangeKernel(d.queue, d.kernel, uint64(d.workSize),
+			localWorksize)
+		if status != cl.Success {
+			return clError(status, "clEnqueueNDRangeKernel")
 		}
 
 		// Read the output buffer.
-		cl.CLEnqueueReadBuffer(d.queue, d.outputBuffer, cl.CL_TRUE, 0,
-			uint32Size*outputBufferSize, unsafe.Pointer(&outputData[0]), 0,
-			nil, nil)
-		if status != cl.CL_SUCCESS {
-			return clError(status, "CLEnqueueReadBuffer")
+		status = cl.EnqueueReadBuffer(d.queue, d.outputBuffer, true, 0,
+			uint32Size*outputBufferSize, unsafe.Pointer(&outputData[0]))
+		if status != cl.Success {
+			return clError(status, "clEnqueueReadBuffer")
 		}
 
 		for i := uint32(0); i < outputData[0]; i++ {
@@ -459,51 +445,10 @@ func newMinerDevs(workDone chan []byte) ([]*Device, error) {
 	return devices, nil
 }
 
-func getDeviceInfo(id cl.CL_device_id,
-	name cl.CL_device_info,
-	str string) string {
-
-	var errNum cl.CL_int
-	var paramValueSize cl.CL_size_t
-
-	errNum = cl.CLGetDeviceInfo(id, name, 0, nil, &paramValueSize)
-
-	if errNum != cl.CL_SUCCESS {
-		return fmt.Sprintf("Failed to find OpenCL device info %s.\n", str)
-	}
-
-	var info interface{}
-	errNum = cl.CLGetDeviceInfo(id, name, paramValueSize, &info, nil)
-	if errNum != cl.CL_SUCCESS {
-		return fmt.Sprintf("Failed to find OpenCL device info %s.\n", str)
-	}
-
-	switch name {
-	case cl.CL_DEVICE_TYPE:
-		var deviceTypeStr string
-
-		appendBitfield(cl.CL_bitfield(info.(cl.CL_device_type)),
-			cl.CL_bitfield(cl.CL_DEVICE_TYPE_CPU),
-			DeviceTypeCPU,
-			&deviceTypeStr)
-
-		appendBitfield(cl.CL_bitfield(info.(cl.CL_device_type)),
-			cl.CL_bitfield(cl.CL_DEVICE_TYPE_GPU),
-			DeviceTypeGPU,
-			&deviceTypeStr)
-
-		info = deviceTypeStr
-	}
-
-	strinfo := fmt.Sprintf("%v", info)
-
-	return strinfo
-}
-
 func (d *Device) Release() {
-	cl.CLReleaseKernel(d.kernel)
-	cl.CLReleaseProgram(d.program)
-	cl.CLReleaseCommandQueue(d.queue)
-	cl.CLReleaseMemObject(d.outputBuffer)
-	cl.CLReleaseContext(d.context)
+	cl.ReleaseKernel(d.kernel)
+	cl.ReleaseProgram(d.program)
+	cl.ReleaseCommandQueue(d.queue)
+	cl.ReleaseMemObject(d.outputBuffer)
+	cl.ReleaseContext(d.context)
 }

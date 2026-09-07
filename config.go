@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/decred/gominer/cl"
 	"github.com/decred/slog"
 	"github.com/jessevdk/go-flags"
 	"github.com/monetarium/monetarium-node/chaincfg"
@@ -52,6 +53,7 @@ type config struct {
 	// Config / log options
 	ConfigFile string `short:"C" long:"configfile" description:"Path to configuration file"`
 	LogDir     string `long:"logdir" description:"Directory to log output."`
+	OpenCLLib  string `long:"opencl-lib" description:"Full path to the OpenCL library to load, for installations the built-in search does not cover"`
 	DebugLevel string `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical} -- You may also specify <subsystem>=<level>,<subsystem2>=<level>,... to set the log level for individual subsystems -- Use show to list available subsystems"`
 
 	// Debugging options
@@ -254,11 +256,6 @@ func loadConfig() (*config, []string, error) {
 	appName := filepath.Base(os.Args[0])
 	appName = strings.TrimSuffix(appName, filepath.Ext(appName))
 	usageMessage := fmt.Sprintf("Use %s -h to show usage", appName)
-	if preCfg.ListDevices {
-		ListDevices()
-		os.Exit(0)
-	}
-
 	if preCfg.ShowVersion {
 		fmt.Printf("%s %s version %s (Go version %s %s/%s)\n", appName, gpuLib(),
 			Version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
@@ -287,6 +284,19 @@ func loadConfig() (*config, []string, error) {
 			parser.WriteHelp(os.Stderr)
 		}
 		return nil, nil, err
+	}
+
+	// Resolve the OpenCL library before anything tries to use it, so a machine
+	// with no driver installed gets a message naming the problem instead of a
+	// failure inside the first CL call.
+	if err := cl.Load(cfg.OpenCLLib); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return nil, nil, err
+	}
+
+	if cfg.ListDevices {
+		ListDevices()
+		os.Exit(0)
 	}
 
 	// Multiple networks can't be selected simultaneously.

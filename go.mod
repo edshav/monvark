@@ -4,6 +4,7 @@ go 1.23
 
 require (
 	github.com/decred/slog v1.2.0
+	github.com/ebitengine/purego v0.10.2
 	github.com/jessevdk/go-flags v1.5.0
 	github.com/jrick/logrotate v1.0.0
 	github.com/monetarium/monetarium-node/blockchain/standalone v1.3.9
@@ -12,6 +13,7 @@ require (
 	github.com/monetarium/monetarium-node/crypto/blake256 v1.3.9
 	github.com/monetarium/monetarium-node/dcrutil v1.3.9
 	github.com/monetarium/monetarium-node/rpcclient v1.3.9
+	golang.org/x/sys v0.30.0
 	lukechampine.com/blake3 v1.3.0
 )
 
@@ -38,5 +40,4 @@ require (
 	github.com/monetarium/monetarium-node/wire v1.3.9 // indirect
 	golang.org/x/crypto v0.33.0 // indirect
 	golang.org/x/net v0.25.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
 )

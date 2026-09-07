@@ -20,24 +20,23 @@ func (d *Device) getKernelExecutionTime(globalWorksize uint32) (time.Duration,
 		d.index, d.deviceName)
 	outputData := make([]uint32, outputBufferSize)
 
-	var status cl.CL_int
+	var status int32
 
 	// arg 0: pointer to the buffer
 	obuf := d.outputBuffer
-	status = cl.CLSetKernelArg(d.kernel, 0,
-		cl.CL_size_t(unsafe.Sizeof(obuf)),
+	status = cl.SetKernelArg(d.kernel, 0, uint64(unsafe.Sizeof(obuf)),
 		unsafe.Pointer(&obuf))
-	if status != cl.CL_SUCCESS {
-		return time.Duration(0), clError(status, "CLSetKernelArg")
+	if status != cl.Success {
+		return time.Duration(0), clError(status, "clSetKernelArg")
 	}
 
 	// args 1..8: midstate
 	for i := 0; i < 8; i++ {
 		ms := d.midstate[i]
-		status = cl.CLSetKernelArg(d.kernel, cl.CL_uint(i+1),
-			uint32Size, unsafe.Pointer(&ms))
-		if status != cl.CL_SUCCESS {
-			return time.Duration(0), clError(status, "CLSetKernelArg")
+		status = cl.SetKernelArg(d.kernel, uint32(i+1), uint32Size,
+			unsafe.Pointer(&ms))
+		if status != cl.Success {
+			return time.Duration(0), clError(status, "clSetKernelArg")
 		}
 	}
 
@@ -48,40 +47,34 @@ func (d *Device) getKernelExecutionTime(globalWorksize uint32) (time.Duration,
 			i2++
 		}
 		lb := d.lastBlock[i2]
-		status = cl.CLSetKernelArg(d.kernel, cl.CL_uint(i+9),
-			uint32Size, unsafe.Pointer(&lb))
-		if status != cl.CL_SUCCESS {
-			return time.Duration(0), clError(status, "CLSetKernelArg")
+		status = cl.SetKernelArg(d.kernel, uint32(i+9), uint32Size,
+			unsafe.Pointer(&lb))
+		if status != cl.Success {
+			return time.Duration(0), clError(status, "clSetKernelArg")
 		}
 		i2++
 	}
 
 	// Clear the found count from the buffer
-	status = cl.CLEnqueueWriteBuffer(d.queue, d.outputBuffer,
-		cl.CL_FALSE, 0, uint32Size, unsafe.Pointer(&zeroSlice[0]),
-		0, nil, nil)
-	if status != cl.CL_SUCCESS {
-		return time.Duration(0), clError(status, "CLEnqueueWriteBuffer")
+	status = cl.EnqueueWriteBuffer(d.queue, d.outputBuffer, false, 0, uint32Size,
+		unsafe.Pointer(&zeroSlice[0]))
+	if status != cl.Success {
+		return time.Duration(0), clError(status, "clEnqueueWriteBuffer")
 	}
 
 	// Execute the kernel and follow its execution time.
 	currentTime := time.Now()
-	var globalWorkSize [1]cl.CL_size_t
-	globalWorkSize[0] = cl.CL_size_t(globalWorksize)
-	var localWorkSize [1]cl.CL_size_t
-	localWorkSize[0] = localWorksize
-	status = cl.CLEnqueueNDRangeKernel(d.queue, d.kernel, 1, nil,
-		globalWorkSize[:], localWorkSize[:], 0, nil, nil)
-	if status != cl.CL_SUCCESS {
-		return time.Duration(0), clError(status, "CLEnqueueNDRangeKernel")
+	status = cl.EnqueueNDRangeKernel(d.queue, d.kernel, uint64(globalWorksize),
+		localWorksize)
+	if status != cl.Success {
+		return time.Duration(0), clError(status, "clEnqueueNDRangeKernel")
 	}
 
 	// Read the output buffer.
-	cl.CLEnqueueReadBuffer(d.queue, d.outputBuffer, cl.CL_TRUE, 0,
-		uint32Size*outputBufferSize, unsafe.Pointer(&outputData[0]), 0,
-		nil, nil)
-	if status != cl.CL_SUCCESS {
-		return time.Duration(0), clError(status, "CLEnqueueReadBuffer")
+	status = cl.EnqueueReadBuffer(d.queue, d.outputBuffer, true, 0,
+		uint32Size*outputBufferSize, unsafe.Pointer(&outputData[0]))
+	if status != cl.Success {
+		return time.Duration(0), clError(status, "clEnqueueReadBuffer")
 	}
 
 	elapsedTime := time.Since(currentTime)
