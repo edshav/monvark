@@ -36,3 +36,8 @@ monvark
 
 vendor/
 
+
+# The node is downloaded, not committed.
+monetarium-node-*
+mond
+mond.exe
