@@ -91,8 +91,8 @@ same framework, but has not been run.
 
 ### What happens on the first run
 
-monvark asks once for the payout address, saves it to `monvark.conf` with mode
-0600, starts the node, waits for the chain to sync, and starts mining. Later
+monvark asks once for the payout address, saves it to `monvark.conf` (creating it
+0600), starts the node, waits for the chain to sync, and starts mining. Later
 runs do not ask again. Ctrl+C stops the miner and the node together.
 
 The first sync downloads the whole chain and takes a while; the miner waits for
@@ -159,6 +159,12 @@ Every command line flag can go in `monvark.conf` instead, one `key=value` per
 line. See [`sample-monvark.conf`](sample-monvark.conf) for the annotated list,
 and `./monvark -h` for everything.
 
+**To change the payout address**, edit the `miningaddr=` line in
+`monvark.conf` and restart monvark. Don't add `--miningaddr` on top of it: an
+address on the command line that disagrees with the file is a startup error
+rather than an override, so that a flag added to a wrapper script somewhere
+cannot quietly redirect the reward. monvark never overwrites this file.
+
 ### Tuning
 
 - `--intensity` — the work size for one kernel launch, as `2^intensity`
@@ -210,9 +216,12 @@ curl http://localhost:3333/
 
 ## Running unattended
 
-Both of these need `--miningaddr` on the command line (or in `monvark.conf`):
-neither a container nor a service unit has a terminal for the first-run prompt,
-and monvark says so rather than hanging on a stdin that will never answer.
+Neither a container nor a service unit has a terminal for the first-run prompt,
+so the payout address has to be in place before monvark starts; it says so
+rather than hanging on a stdin that will never answer.
+
+Put the address in `monvark.conf` rather than in `--miningaddr` — see
+[Files and settings](#files-and-settings).
 
 ### Docker
 
@@ -237,9 +246,12 @@ ENTRYPOINT ["/opt/monvark/monvark"]
 docker build -t monvark .
 docker run --rm --gpus all monvark -B            # is the GPU visible at all?
 
+echo miningaddr=MsMkhrc1z67m8iE56tFkDavsoHjeDiHFEwf > /etc/monvark.conf
+
 docker run -d --name monvark --gpus all --stop-timeout 60 \
   -v monvark-data:/root/.monvark \
-  monvark --miningaddr=MsMkhrc1z67m8iE56tFkDavsoHjeDiHFEwf
+  -v /etc/monvark.conf:/root/.monvark/monvark.conf \
+  monvark
 ```
 
 - **The volume is what keeps the chain.** The node's data directory is
@@ -259,7 +271,7 @@ Wants=network-online.target
 
 [Service]
 User=miner
-ExecStart=/opt/monvark/monvark --miningaddr=MsMkhrc1z67m8iE56tFkDavsoHjeDiHFEwf
+ExecStart=/opt/monvark/monvark
 Restart=on-failure
 RestartSec=30
 # monvark stops its node over RPC on SIGTERM; don't cut the shutdown short.
@@ -268,6 +280,17 @@ TimeoutStopSec=120
 [Install]
 WantedBy=multi-user.target
 ```
+
+The address goes in the service user's config, not in the unit:
+
+```sh
+sudo -u miner mkdir -p /home/miner/.monvark
+echo miningaddr=MsMkhrc1z67m8iE56tFkDavsoHjeDiHFEwf \
+  | sudo -u miner tee /home/miner/.monvark/monvark.conf
+```
+
+Changing it later is an edit to that line and `systemctl restart monvark` — no
+unit edit, no `daemon-reload`.
 
 Save that as `/etc/systemd/system/monvark.service` and
 `systemctl enable --now monvark`. Logging goes to stdout, so the journal has

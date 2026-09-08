@@ -51,17 +51,26 @@ func validatePayout(addr string, params *chaincfg.Params) error {
 	return nil
 }
 
-// checkPerms fails when path is readable or writable by anyone but its owner.
-// Both files monvark writes go through it: every field in monvark.conf parses
-// back into the config struct including the payout address, and mond.conf
-// carries the node's credentials -- so access to either is access to the
-// payout.  The mask is 0077 rather than 0022 deliberately: merely reading
-// mond.conf is enough to drive the node's RPC.  A file that does not exist yet
-// is not an error: first run creates it.
+// The two files monvark writes carry different things, so they are checked
+// against different masks.
+const (
+	// monvark.conf holds no secret -- the RPC fields carry no flag tags, so
+	// the ini parser never fills them -- but write access to it is write
+	// access to the payout.
+	permsWritable os.FileMode = 0022
+
+	// mond.conf holds the node's RPC credentials; reading it is already the
+	// compromise.
+	permsPrivate os.FileMode = 0077
+)
+
+// checkPerms fails when path grants anyone but its owner the access mask
+// covers.  A file that does not exist yet is not an error: first run creates
+// it.
 //
 // Windows is skipped because Go synthesizes the unix mode bits there, so the
 // check would reject files that are in fact fine.
-func checkPerms(path string) error {
+func checkPerms(path string, mask os.FileMode) error {
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -72,9 +81,9 @@ func checkPerms(path string) error {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
-	if perm := info.Mode().Perm(); perm&0077 != 0 {
-		return fmt.Errorf("%s is accessible to other users (mode %04o); "+
-			"run: chmod 600 %s", path, perm, path)
+	if perm := info.Mode().Perm(); perm&mask != 0 {
+		return fmt.Errorf("%s is too permissive (mode %04o); run: chmod %04o %s",
+			path, perm, perm&^mask, path)
 	}
 	return nil
 }
@@ -130,7 +139,7 @@ func promptPayout() (string, error) {
 // for one on first run.  Precedence is the command line, then the config file,
 // then the prompt.
 func resolvePayout(cfg *config) (string, error) {
-	if err := checkPerms(cfg.ConfigFile); err != nil {
+	if err := checkPerms(cfg.ConfigFile, permsWritable); err != nil {
 		return "", err
 	}
 
@@ -153,7 +162,7 @@ func resolvePayout(cfg *config) (string, error) {
 	// what to do instead of blocking on a stdin that will never answer.
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return "", fmt.Errorf("no payout address configured and stdin is not "+
-			"a terminal; pass --miningaddr, or add miningaddr= to %s",
+			"a terminal; add miningaddr= to %s, or pass --miningaddr",
 			cfg.ConfigFile)
 	}
 

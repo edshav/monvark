@@ -102,7 +102,7 @@ func checkMondConf(path string) error {
 		return err
 	}
 
-	if err := checkPerms(path); err != nil {
+	if err := checkPerms(path, permsPrivate); err != nil {
 		return err
 	}
 

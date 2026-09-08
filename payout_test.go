@@ -95,7 +95,7 @@ func TestCheckPerms(t *testing.T) {
 	if err := os.WriteFile(path, []byte("miningaddr=Vs1\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkPerms(path); err != nil {
+	if err := checkPerms(path, permsWritable); err != nil {
 		t.Fatalf("0600 rejected: %v", err)
 	}
 
@@ -104,18 +104,33 @@ func TestCheckPerms(t *testing.T) {
 	if err := os.Chmod(path, 0620); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkPerms(path); err == nil {
+	if err := checkPerms(path, permsWritable); err == nil {
 		t.Fatal("group-writable config accepted")
 	}
 	if err := os.Chmod(path, 0602); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkPerms(path); err == nil {
+	if err := checkPerms(path, permsWritable); err == nil {
 		t.Fatal("world-writable config accepted")
 	}
 
+	// A readable config is a different matter: monvark.conf holds no secret,
+	// so 0644 -- what a bind mount or a plain `tee` produces, and what the
+	// docker workflow for changing the address runs into -- has to pass.  The
+	// same mode under permsPrivate does not: that mask guards mond.conf, where
+	// reading is already enough to drive the node's RPC.
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPerms(path, permsWritable); err != nil {
+		t.Fatalf("0644 config rejected: %v", err)
+	}
+	if err := checkPerms(path, permsPrivate); err == nil {
+		t.Fatal("0644 credentials file accepted")
+	}
+
 	// A file that does not exist yet is not an error: first run creates it.
-	if err := checkPerms(filepath.Join(dir, "absent.conf")); err != nil {
+	if err := checkPerms(filepath.Join(dir, "absent.conf"), permsWritable); err != nil {
 		t.Fatalf("absent config rejected: %v", err)
 	}
 }
