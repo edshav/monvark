@@ -209,7 +209,14 @@ func loadConfig() (*config, []string, error) {
 	}
 
 	if cfg.ListDevices {
-		ListDevices()
+		names, err := listDevices()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return nil, nil, err
+		}
+		for i, name := range names {
+			fmt.Printf("DEV #%d: %s\n", i, name)
+		}
 		os.Exit(0)
 	}
 

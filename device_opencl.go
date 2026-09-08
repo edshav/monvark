@@ -7,7 +7,6 @@ import (
 	_ "embed"
 	"fmt"
 	"math"
-	"os"
 	"slices"
 	"sync"
 	"time"
@@ -146,28 +145,27 @@ func getCLDevices(platform cl.PlatformID) ([]cl.DeviceID, error) {
 	return devices, nil
 }
 
-// ListDevices prints a list of devices present.
-func ListDevices() {
+// listDevices returns the name of every OpenCL device, in the order -l numbers
+// them: one sequence across all platforms.  The device prompt and -l walk this
+// same list, so an index quoted by either always names the same device.
+func listDevices() ([]string, error) {
 	platformIDs, err := getCLPlatforms()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not get CL platforms: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("could not get CL platforms: %w", err)
 	}
 
-	deviceListIndex := 0
+	var names []string
 	for i := range platformIDs {
-		platformID := platformIDs[i]
-		deviceIDs, err := getCLDevices(platformID)
+		deviceIDs, err := getCLDevices(platformIDs[i])
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Could not get CL devices for platform: %v\n", err)
-			os.Exit(1)
+			return nil, fmt.Errorf("could not get CL devices for platform: %w",
+				err)
 		}
 		for _, deviceID := range deviceIDs {
-			fmt.Printf("DEV #%d: %s\n", deviceListIndex, deviceName(deviceID))
-			deviceListIndex++
+			names = append(names, deviceName(deviceID))
 		}
-
 	}
+	return names, nil
 }
 
 func NewDevice(index int, order int, deviceID cl.DeviceID,

@@ -135,11 +135,11 @@ func TestCheckPerms(t *testing.T) {
 	}
 }
 
-func TestAppendMiningAddr(t *testing.T) {
+func TestAppendSetting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "monvark.conf")
 
-	if err := appendMiningAddr(path, "Vs1"); err != nil {
+	if err := appendSetting(path, "miningaddr=Vs1\n"); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
@@ -161,7 +161,7 @@ func TestAppendMiningAddr(t *testing.T) {
 	if err := os.WriteFile(path, []byte("debuglevel=debug\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendMiningAddr(path, "Vs2"); err != nil {
+	if err := appendSetting(path, "miningaddr=Vs2\n"); err != nil {
 		t.Fatal(err)
 	}
 	got, err = os.ReadFile(path)
@@ -180,7 +180,7 @@ func TestAppendMiningAddr(t *testing.T) {
 	if err := os.WriteFile(path, []byte("debuglevel=debug"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendMiningAddr(path, "Vs3"); err != nil {
+	if err := appendSetting(path, "miningaddr=Vs3\n"); err != nil {
 		t.Fatal(err)
 	}
 	got, err = os.ReadFile(path)

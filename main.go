@@ -91,7 +91,16 @@ func monvarkMain() (err error) {
 		}
 	}()
 
-	// Build the devices first.  Everything after this point can take minutes,
+	// Which devices to mine with is settled before any of them is built, since
+	// the answer is what decides which ones newMinerDevs constructs.  It needs
+	// nothing more than the enumeration.
+	asked, err := resolveDevices(cfg)
+	if err != nil {
+		critical(ctx, "%v", err)
+		return err
+	}
+
+	// Build the devices next.  Everything after this point can take minutes,
 	// and a user whose driver is broken should not wait through it.  This is
 	// the full build rather than a cheap enumeration on purpose: getCLDevices
 	// only enumerates, while NewDevice creates the context and compiles
@@ -106,6 +115,22 @@ func monvarkMain() (err error) {
 	if len(devices) == 0 {
 		critical(ctx, "No devices started")
 		return errors.New("no devices started")
+	}
+
+	// Only now, with every chosen device built, is the answer worth keeping.
+	if asked {
+		if err := saveDeviceChoice(cfg, devices); err != nil {
+			critical(ctx, "%v", err)
+			return err
+		}
+	}
+
+	// Say what got taken, on every run and whether or not anything was asked.
+	// runDevice logs the same names, but only once mining actually starts --
+	// after the payout question, the node, and on a first run the entire chain
+	// download.  This is the answer while any of that is still ahead.
+	for _, d := range devices {
+		mainLog.Infof("Mining on device #%d: %s", d.index, d.deviceName)
 	}
 
 	// newMinerDevs takes no context, so an interrupt during the kernel compile

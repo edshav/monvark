@@ -88,12 +88,12 @@ func checkPerms(path string, mask os.FileMode) error {
 	return nil
 }
 
-// appendMiningAddr appends the payout address to path, creating it 0600 if it
-// does not exist and preserving whatever is already there.  A file whose last
-// line has no terminating newline gets one first: monvark's own writes always
-// end in one, but this file is meant to be hand-edited, and without the check
-// the address would be glued onto the end of whatever key came last.
-func appendMiningAddr(path, addr string) error {
+// appendSetting appends text to path, creating it 0600 if it does not exist
+// and preserving whatever is already there.  A file whose last line has no
+// terminating newline gets one first: monvark's own writes always end in one,
+// but this file is meant to be hand-edited, and without the check the setting
+// would be glued onto the end of whatever key came last.
+func appendSetting(path, text string) error {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
 		return err
@@ -115,17 +115,26 @@ func appendMiningAddr(path, addr string) error {
 		}
 	}
 
-	_, err = fmt.Fprintf(f, "%sminingaddr=%s\n", prefix, addr)
+	_, err = fmt.Fprintf(f, "%s%s", prefix, text)
 	return err
 }
 
-// promptPayout asks for an address on stdout and reads one from stdin.
-func promptPayout() (string, error) {
-	fmt.Fprint(os.Stdout, "\nNo payout address configured.\n"+
-		"Block rewards are paid to a Monetarium address you control.  Create\n"+
-		"one with monetarium-wallet and paste it below.  The wallet is not\n"+
-		"needed while mining and should not be installed on this machine;\n"+
-		"monvark never holds keys.\n\nPayout address: ")
+// interactive reports whether there is a terminal to hold a conversation on.
+// Both ends count: stdin is what answers, but a question written to a
+// redirected stdout is one nobody can see, and monvark would sit blocked on an
+// answer that is never coming.  ./monvark >monvark.log from a terminal is
+// exactly that shape, and it happens on the first run, before anything else.
+func interactive() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) &&
+		term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// promptLine writes text to stdout and reads one line back from stdin.  Both
+// first-run questions go through it, and neither asks twice: an answer that
+// does not parse leaves through main's critical(), and the miner is simply run
+// again -- no device, node or chain work has happened by then.
+func promptLine(text string) (string, error) {
+	fmt.Fprint(os.Stdout, text)
 
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -133,6 +142,15 @@ func promptPayout() (string, error) {
 	}
 	// TrimSpace also removes the carriage return Windows terminals supply.
 	return strings.TrimSpace(line), nil
+}
+
+// promptPayout asks for an address on stdout and reads one from stdin.
+func promptPayout() (string, error) {
+	return promptLine("\nNo payout address configured.\n" +
+		"Block rewards are paid to a Monetarium address you control.  Create\n" +
+		"one with monetarium-wallet and paste it below.  The wallet is not\n" +
+		"needed while mining and should not be installed on this machine;\n" +
+		"monvark never holds keys.\n\nPayout address: ")
 }
 
 // resolvePayout returns the address block rewards are paid to, asking the user
@@ -157,12 +175,12 @@ func resolvePayout(cfg *config) (string, error) {
 		return addr, nil
 	}
 
-	// Only a terminal can answer a question.  Under systemd (StandardInput=null
-	// by default) or a docker run without -i there is nobody to ask, so say
-	// what to do instead of blocking on a stdin that will never answer.
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return "", fmt.Errorf("no payout address configured and stdin is not "+
-			"a terminal; add miningaddr= to %s, or pass --miningaddr",
+	// Under systemd (StandardInput=null by default), a docker run without -i,
+	// or any run with its output redirected, there is nobody to ask, so say
+	// what to do instead of blocking on an answer that will never come.
+	if !interactive() {
+		return "", fmt.Errorf("no payout address configured and there is no "+
+			"terminal to ask on; add miningaddr= to %s, or pass --miningaddr",
 			cfg.ConfigFile)
 	}
 
@@ -174,7 +192,8 @@ func resolvePayout(cfg *config) (string, error) {
 	if err := validatePayout(addr, chainParams); err != nil {
 		return "", err
 	}
-	if err := appendMiningAddr(cfg.ConfigFile, addr); err != nil {
+	setting := fmt.Sprintf("miningaddr=%s\n", addr)
+	if err := appendSetting(cfg.ConfigFile, setting); err != nil {
 		return "", err
 	}
 	mainLog.Infof("Payout address saved to %s", cfg.ConfigFile)
