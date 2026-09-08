@@ -33,7 +33,7 @@ import (
 // release branch of the form 'release-vMAJOR.MINOR' and drop the pre-release
 // portion on it, while this branch keeps a pre-release of 'pre'.  That way a
 // build from source is distinct from a reproducible release build.
-var Version = "2.1.0-pre"
+var Version = "2.2.0-pre"
 
 // vcsCommitID attempts to return the version control system short commit hash
 // that was used to build the binary.  It currently only detects git commits.
