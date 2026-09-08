@@ -88,13 +88,36 @@ would wait it out on every device before monvark could stop its node over RPC.
 `--intensity` sets the work size (`2^i`), i.e. the length of one kernel
 launch — it does *not* throttle the device or reduce heat.
 
-**The default takes every device, not just the GPU.** `newMinerDevs`
-enumerates with `cl.DeviceTypeAll` and, with no `--devices`, enables all of
-them — the CPU and the integrated graphics included. On a machine someone is
-sitting at that can look like a hang: a GPU has no preemption, so a kernel
-queued on the display adapter stalls the compositor. The README documents
-`--devices` as the fix; changing the default would be a behaviour change for
-existing rigs, so raise it rather than quietly flipping it.
+**Every device is a candidate, not just the GPU.** `newMinerDevs` enumerates
+with `cl.DeviceTypeAll` and enables everything `cfg.DeviceIDs` does not exclude
+— the CPU and the integrated graphics included. On a machine someone is sitting
+at that can look like a hang: a GPU has no preemption, so a kernel queued on the
+display adapter stalls the compositor.
+
+`resolveDevices` (`devices.go`) is what keeps that from being the silent
+default: with no `--devices` it lists the devices and asks, once. **It asks only
+where there is a choice and somebody to ask** — two or more devices, and
+`interactive()` (`payout.go`, shared with `resolvePayout`) true. That test covers
+**both** stdin and stdout: stdin is what answers, but a question written to a
+redirected stdout is one nobody sees, and monvark would block on it. One device
+means no question and nothing saved, because a pinned `devices=0` on a machine
+with no alternative is how a second card added later gets silently ignored —
+that machine gets a warning on **stdout** instead, deliberately not through the
+log, since `debuglevel=warn` would otherwise silence the only safeguard it has.
+No terminal means no question either: taking everything is right on a rig nobody
+sits at, so unlike a missing payout address it is not an error.
+
+The answer is written by `saveDeviceChoice`, called from `main` **after**
+`newMinerDevs` has built every chosen device — a choice saved earlier outlives
+the failure it caused, and the next run does not ask again. `main` also logs
+which devices were taken on every run, before the payout question and the chain
+sync, unlike `runDevice`'s own "Started DEV" line, which lands only once mining
+actually begins.
+
+The enumeration itself must stay `cl.DeviceTypeAll`. Indices are sequential
+across platforms (`listDevices`), `-l` and the prompt walk that one list, and any
+filter applied during enumeration would renumber the devices under everyone who
+already has a `devices=` line.
 
 ### Work data layout — the core domain fact
 

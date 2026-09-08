@@ -85,21 +85,28 @@ quarantine flag first:
 
 Apple deprecated OpenCL back in 10.14, but the framework is still present and
 monvark loads it. `-l` lists the CPU and the integrated GPU as OpenCL devices
-alongside the discrete card, so pass `--devices` with the index you actually
-want. Verified on an Intel Mac with a Radeon Pro. Apple Silicon compiles and loads the
+alongside the discrete card, so answer the device question with the index you
+actually want. Verified on an Intel Mac with a Radeon Pro. Apple Silicon compiles and loads the
 same framework, but has not been run.
 
 ### What happens on the first run
 
-monvark asks once for the payout address, saves it to `monvark.conf` (creating it
-0600), starts the node, waits for the chain to sync, and starts mining. Later
-runs do not ask again. Ctrl+C stops the miner and the node together.
+On first run monvark asks two questions -- which devices to mine with, and the
+payout address -- saves both answers to `monvark.conf` (creating it 0600), then
+starts the node, waits for the chain to sync, and starts mining. Later runs do
+not ask again. Ctrl+C stops the miner and the node together.
+
+The device question comes up only where there is something to choose (two or
+more OpenCL devices) and somebody at a terminal to answer; see [Don't hand it
+the whole machine](#dont-hand-it-the-whole-machine).
 
 The first sync downloads the whole chain and takes a while; the miner waits for
 it rather than mining on a stale tip.
 
-To skip the question — under systemd or Docker, where there is nobody to ask —
-pass `--miningaddr` or put `miningaddr=` in the config file.
+Under systemd or Docker there is nobody to ask, so the payout address has to be
+in place beforehand: pass `--miningaddr`, or put `miningaddr=` in the config
+file. The device question is simply not asked there, and every device found is
+used unless `devices=` says otherwise.
 
 Mainnet is the default. `--testnet` or `--simnet` mine on another network
 instead.
@@ -110,10 +117,10 @@ so a reward is not spendable straight away.
 
 ### Don't hand it the whole machine
 
-**By default monvark mines on every OpenCL device it can find** — not just the
+**Mining takes a device whole**, and OpenCL offers monvark more than the
 graphics card. On a laptop or a desktop that usually means three: the CPU, the
 integrated graphics that draw your screen, and the discrete GPU. `./monvark -l`
-lists them exactly as monvark will use them:
+lists them with the indices everything else uses:
 
 ```
 DEV #0: Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz
@@ -122,12 +129,24 @@ DEV #2: AMD Radeon Pro 5300M Compute Engine
 ```
 
 A GPU kernel cannot be preempted, so the display adapter stops repainting while
-one runs and the machine looks frozen. **On a machine you use, name the discrete
-card** by its index from `-l`:
+one runs and the machine looks frozen. That is why monvark asks on the first run
+instead of deciding for you:
 
-```sh
-./monvark --devices=2
 ```
+Devices, comma separated: 2
+```
+
+**On a machine you sit at, that means the discrete card and nothing else.** The
+answer goes into `monvark.conf` as a `devices=` line with the device names in a
+comment above it, and the question does not come back; change your mind by
+editing that line, or pass `--devices=2` for one run.
+
+Two cases skip the question. Where nobody can answer — a service unit, a
+container, or a run with its output redirected — every device found is used, so
+put `devices=` in the config file if that is not what you want. And a machine
+with a single OpenCL device is not asked, because there is nothing to choose;
+it gets the same warning about the screen, and no `devices=` line is written.
+At the default log level every run also names the devices it took.
 
 ## Checking your setup
 
@@ -174,9 +193,10 @@ cannot quietly redirect the reward. monvark never overwrites this file.
   `--intensity`.
 - `--autocalibrate` — used when neither of the above is set: monvark sizes the
   work to spend about this many milliseconds per kernel launch (default 500).
-- `--devices` — comma-separated device indices (from `-l`) to mine with. By
-  default every device found is used, all at once — see [Don't hand it the
-  whole machine](#dont-hand-it-the-whole-machine).
+- `--devices` — comma-separated device indices (from `-l`) to mine with.
+  Normally set once by the question monvark asks on first run; where there was
+  nobody to ask, every device found is used — see [Don't hand it the whole
+  machine](#dont-hand-it-the-whole-machine).
 - `--dutycycle` — the percentage of the time a device hashes, 1–100 (default
   100). Below 100 it idles between kernel launches for as long as the arithmetic
   needs: at 50 it idles exactly as long as each launch took. This is the only
@@ -216,9 +236,11 @@ curl http://localhost:3333/
 
 ## Running unattended
 
-Neither a container nor a service unit has a terminal for the first-run prompt,
-so the payout address has to be in place before monvark starts; it says so
-rather than hanging on a stdin that will never answer.
+Neither a container nor a service unit has a terminal for the first-run
+prompts, so the payout address has to be in place before monvark starts; it says
+so rather than hanging on a stdin that will never answer. The device question is
+skipped for the same reason, but it stops nothing: with no `devices=` line every
+device found is used, which is usually right on a machine dedicated to mining.
 
 Put the address in `monvark.conf` rather than in `--miningaddr` — see
 [Files and settings](#files-and-settings).
@@ -304,9 +326,11 @@ deliberate stop: monvark exits 0 when it is interrupted.
 ## Troubleshooting
 
 **The machine froze, or the screen stopped redrawing, as soon as mining
-started.** monvark took every OpenCL device, including the one drawing your
-display. Restart with `--devices=` naming only the discrete card, and see
-[Don't hand it the whole machine](#dont-hand-it-the-whole-machine).
+started.** A device that draws your display is in the set being mined on: the
+answer given on first run was broader than intended, or there was nobody to ask
+and monvark took everything. Edit the `devices=` line in `monvark.conf` to name
+only the discrete card, and see [Don't hand it the whole
+machine](#dont-hand-it-the-whole-machine).
 
 **"No devices started", or the device fails while compiling the kernel.** The
 OpenCL driver is missing or broken — a card that shows up in `-l` can still
